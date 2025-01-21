@@ -1,13 +1,12 @@
 {
     "vpc_peerings": [
         {
-            "requester_peering_id": "pcx-0cd9b45727defcc3e",
-            "accepter_vpc_id": "vpc-03f4f0b3d3aaba624",
-            "requester_cidr": "10.10.0.0/16",
+            "requester_peering_id": "pcx-0123456789abcdefg",
+            "accepter_vpc_id": "vpc-0123456789abcdefg",
+            "requester_cidr": "127.127.127.127/16",
             "rds_security_groups": [
-                "sg-003d1dce2e1bec21f",
-                "sg-0d64a6f99eacb301c",
-                "sg-0100514fe126305e2"
+                "sg-01234567890abcdef",
+                "sg-1234567890abcdefg"
             ]
         }
     ]
