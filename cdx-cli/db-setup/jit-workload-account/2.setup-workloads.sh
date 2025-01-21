@@ -107,6 +107,7 @@ wait_for_namespace() {
     log "Namespace creation verification failed"
     return 1
 }
+
 #Edit
 ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 echo "Your AWS Account ID is: $ACCOUNT_ID"
@@ -118,9 +119,9 @@ PRIVATE_SUBNET_2_CIDR="10.10.2.0/24"
 PUBLIC_SUBNET_1_CIDR="10.10.3.0/24"
 PUBLIC_SUBNET_2_CIDR="10.10.4.0/24"
 ECS_CLUSTER_NAME="${PROJECT_NAME}-cluster"
-LOG_GROUP_NAME_1="/ecs/${PROJECT_NAME}/proxyserver"
-LOG_GROUP_NAME_2="/ecs/${PROJECT_NAME}/proxysql"
-SECRET_NAME="CDX_SECRETS_v1.0.6"
+LOG_GROUP_NAME_1="/ecs/${PROJECT_NAME}/cloudanix/ecr-aws-jit-proxy-server"
+LOG_GROUP_NAME_2="/ecs/${PROJECT_NAME}/cloudanix/ecr-aws-jit-proxy-sql"
+SECRET_NAME="CDX_SECRETS"
 CDX_AUTH_TOKEN="AUTH_TOKEN_1234567890"
 CDX_SIGNATURE_SECRET_KEY="SECRET_1234567890"
 CDX_SENTRY_DSN="CDX_SENTRY_DSN"
@@ -291,8 +292,7 @@ aws iam create-policy \
             "Effect": "Allow",
             "Action": "sts:AssumeRole",
             "Resource": [
-                "arn:aws:iam::108953788033:role/cdx-us-east-1-774118602354-role_cross_accntb8a9ad6f",
-                "arn:aws:iam::108953788033:role/cdx-us-east-1-774118602354-role_cross_accntaa1187e4"
+                "*",
             ]
         }]
     }'
@@ -466,13 +466,14 @@ ACCESS_POINT_ID=$(aws efs create-access-point \
     --query 'AccessPointId' \
     --output text)
 
+
 cat <<EOF >  "proxyserver-task-definition.json"
 {
     "family": "proxyserver-task",
     "containerDefinitions": [
         {
             "name": "proxyserver",
-            "image": "$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/proxy-server:latest",
+            "image": "$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/cloudanix/ecr-aws-jit-proxy-server:latest",
             "cpu": 0,
             "portMappings": [
                 {
@@ -544,9 +545,8 @@ cat <<EOF >  "proxysql-task-definition.json"
     "containerDefinitions": [
         {
             "name": "proxysql",
-            "image": "$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/custom-proxysql:latest",
-            "cpu": 256,
-            "memoryReservation": 512,
+            "image": "$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/cloudanix/ecr-aws-jit-proxy-sql:latest",
+            "cpu": 0,
             "portMappings": [
                 {
                     "name": "proxysql-admin",

@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Set variables
-SOURCE_ACCOUNT_ID="774118602354"
+SOURCE_ACCOUNT_ID="${1:-"774118602354"}"
 TARGET_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 echo "Your AWS Account ID is: $TARGET_ACCOUNT_ID"
 
-SOURCE_REGION="us-east-2"
-TARGET_REGION="${1:-"ap-south-1"}"
+SOURCE_REGION="${2:-"us-east-2"}"
+TARGET_REGION="${3:-"ap-south-1"}"
 
 REPOSITORIES=("cloudanix/ecr-aws-jit-proxy-sql" "cloudanix/ecr-aws-jit-proxy-server")
 IMAGE_TAG="latest"

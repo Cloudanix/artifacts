@@ -34,9 +34,9 @@ cat << 'EOF' > permission-set-policy.json
 EOF
 
 # Variables
-INSTANCE_ARN="arn:aws:sso:::instance/ssoins-722367552337aabd"
+INSTANCE_ARN="$1"
 PERMISSION_SET_NAME="EcsSsmAccess"
-ACCOUNT_ID_2="952490538873"
+ACCOUNT_ID_2="$2"
 
 echo "Step 1: Creating Permission Set..."
 # Create the Permission Set and capture its ARN directly
@@ -57,47 +57,9 @@ aws sso-admin put-inline-policy-to-permission-set \
     --permission-set-arn $PERMISSION_SET_ARN \
     --inline-policy file://permission-set-policy.json
 
-echo "Step 3: Starting provisioning..."
-# Provision the Permission Set and get the provisioning status
-PROVISION_STATUS=$(aws sso-admin provision-permission-set \
-    --instance-arn $INSTANCE_ARN \
-    --permission-set-arn $PERMISSION_SET_ARN \
-    --target-type AWS_ACCOUNT \
-    --target-id $ACCOUNT_ID_2 \
-    --output json)
-
-REQUEST_ID=$(echo $PROVISION_STATUS | jq -r '.PermissionSetProvisioningStatus.RequestId')
-echo "Provisioning Request ID: $REQUEST_ID"
-
-echo "Step 4: Monitoring provisioning status..."
-while true; do
-    STATUS=$(aws sso-admin describe-permission-set-provisioning-status \
-        --instance-arn $INSTANCE_ARN \
-        --provision-permission-set-request-id $REQUEST_ID \
-        --query 'PermissionSetProvisioningStatus.Status' \
-        --output text)
-    
-    echo "Current status: $STATUS"
-    
-    if [ "$STATUS" = "SUCCEEDED" ]; then
-        echo "Provisioning completed successfully!"
-        break
-    elif [ "$STATUS" = "FAILED" ]; then
-        echo "Provisioning failed. Getting failure details..."
-        aws sso-admin describe-permission-set-provisioning-status \
-            --instance-arn $INSTANCE_ARN \
-            --provision-permission-set-request-id $REQUEST_ID
-        exit 1
-    fi
-    
-    sleep 5
-done
-
-echo "Step 5: Verifying permission set exists..."
+echo "Step 3: Verifying permission set exists..."
 aws sso-admin describe-permission-set \
     --instance-arn $INSTANCE_ARN \
     --permission-set-arn $PERMISSION_SET_ARN
 
 echo "Setup completed! To assign users/groups to this permission set, use the IAM Identity Center console or run additional AWS CLI commands."
-
-# #TODO : provision logic for group/user of JIT Account 
