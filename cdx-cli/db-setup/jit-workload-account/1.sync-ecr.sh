@@ -24,10 +24,7 @@ cleanup_old_images() {
             aws ecr batch-delete-image \
                 --repository-name "$repository" \
                 --region "$region" \
-                --image-ids imageDigest=$digest \
-                --no-cli-pager \
-                --no-cli-auto-prompt \
-                --output text > /dev/null
+                --image-ids imageDigest=$digest --output text > /dev/null
             echo "Deleted image: $digest"
         done
     else
@@ -36,14 +33,14 @@ cleanup_old_images() {
 }
 
 # Set variables
-SOURCE_ACCOUNT_ID="581155127348"
+SOURCE_ACCOUNT_ID="774118602354"
 TARGET_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 echo "Your AWS Account ID is: $TARGET_ACCOUNT_ID"
 
-SOURCE_REGION="ap-south-1"
+SOURCE_REGION="us-east-2"
 TARGET_REGION=$(prompt_with_default "Enter the region of jit db setup" "ap-south-1")
 
-REPOSITORIES=("cloudanix/ecr-aws-jit-proxy-sql")
+REPOSITORIES=("cloudanix/ecr-aws-jit-proxy-sql" "cloudanix/ecr-aws-jit-proxy-server")
 IMAGE_TAG="latest"
 PLATFORM="linux/amd64"
 
@@ -66,11 +63,11 @@ for REPO in "${REPOSITORIES[@]}"; do
 
     # Pull the image from the source account's ECR
     echo "Pulling image from source account..."
-    docker pull --platform "$PLATFORM" "$SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/custom-proxysql:$IMAGE_TAG"
+    docker pull --platform "$PLATFORM" "$SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/$REPO:$IMAGE_TAG"
 
     # Tag the image for the target account's ECR
     echo "Tagging image for target account..."
-    docker tag "$SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/custom-proxysql:$IMAGE_TAG" "$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com/$REPO:$IMAGE_TAG"
+    docker tag "$SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/$REPO:$IMAGE_TAG" "$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com/$REPO:$IMAGE_TAG"
 
     # Push the image to the target account's ECR
     echo "Pushing image to target account..."

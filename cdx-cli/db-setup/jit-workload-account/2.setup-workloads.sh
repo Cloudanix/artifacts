@@ -125,11 +125,11 @@ echo "Your AWS Account ID is: $ACCOUNT_ID"
 # Project Configuration
 PROJECT_NAME=$(prompt_with_default "Project Name" "cdx-jit-db")
 # Network Configuration
-VPC_CIDR=$(prompt_with_default "VPC CIDR Block" "10.142.0.0/16")
-PRIVATE_SUBNET_1_CIDR=$(prompt_with_default "Private Subnet 1 CIDR" "10.142.1.0/24")
-PRIVATE_SUBNET_2_CIDR=$(prompt_with_default "Private Subnet 2 CIDR" "10.142.2.0/24")
-PUBLIC_SUBNET_1_CIDR=$(prompt_with_default "Public Subnet 1 CIDR" "10.142.3.0/24")
-PUBLIC_SUBNET_2_CIDR=$(prompt_with_default "Public Subnet 2 CIDR" "10.142.4.0/24")
+VPC_CIDR=$(prompt_with_default "VPC CIDR Block" "10.x.0.0/16")
+PRIVATE_SUBNET_1_CIDR=$(prompt_with_default "Private Subnet 1 CIDR" "10.x.1.0/24")
+PRIVATE_SUBNET_2_CIDR=$(prompt_with_default "Private Subnet 2 CIDR" "10.x.2.0/24")
+PUBLIC_SUBNET_1_CIDR=$(prompt_with_default "Public Subnet 1 CIDR" "10.x.3.0/24")
+PUBLIC_SUBNET_2_CIDR=$(prompt_with_default "Public Subnet 2 CIDR" "10.x.4.0/24")
 BUCKET_NAME=$(prompt_with_default "Enter S3 bucketname according to cdx-jit-db-logs-<org_name> pattern" "cdx-jit-db-logs--jfinance")
 # ECS Configuration
 ECS_CLUSTER_NAME="cdx-jit-db-cluster"

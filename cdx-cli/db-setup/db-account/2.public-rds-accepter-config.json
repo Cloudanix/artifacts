@@ -1,13 +1,13 @@
 {
     "vpc_peerings": [
         {
-            "requester_peering_id": "pcx-080ed348a4990b3d0",
-            "accepter_vpc_id": "vpc-03f4f0b3d3aaba624",
-            "requester_cidr": "10.10.0.0/16",
-            "requester_nat_gateway_ip": "43.204.255.148", 
+            "requester_peering_id": "pcx-09xxxxxxxxxx",
+            "accepter_vpc_id": "vpc-01xxxxxxxxx",
+            "requester_cidr": "10.1.0.0/16",
+            "requester_nat_gateway_ip": "13.1.1.1", 
             "rds_security_groups": [
-                "sg-003d1dce2e1bec21f",
-                "sg-0100514fe126305e2"
+                "sg-00xxxxxxxxx",
+                "sg-02xxxxxxxxx"
             ]
         }
     ]
