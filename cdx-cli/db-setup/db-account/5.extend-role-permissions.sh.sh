@@ -2,13 +2,21 @@
 set -e
 set -u
 
+prompt_with_default() {
+    local prompt="$1"
+    local default_value="$2"
+    read -p "$prompt [$default_value]: " user_input
+    echo "${user_input:-$default_value}"
+}
+
 # Function for logging
 log() {
     echo "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $*"
 }
 
-ACCOUNT_ID="$1"
-ROLE_NAME="$2"
+ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
+echo "Your AWS Account ID is: $ACCOUNT_ID"
+ROLE_NAME=$(prompt_with_default "ROLE NAME" "cdx-role_cross_accnt")
 
 # Variables
 ROLES=(
@@ -59,14 +67,14 @@ EOF
 
 # Create the policies in IAM
 RDS_CONNECT_POLICY_ARN=$(aws iam create-policy \
-    --policy-name RDSConnectPolicy \
+    --policy-name cdx-RDSConnectPolicy \
     --policy-document "$RDS_CONNECT_POLICY" \
     --description "Policy for RDS IAM authentication connection" \
     --query 'Policy.Arn' \
     --output text)
 
 RDS_AUTH_TOKEN_POLICY_ARN=$(aws iam create-policy \
-    --policy-name RDSAuthTokenGenerationPolicy \
+    --policy-name cdx-RDSAuthTokenGenerationPolicy \
     --policy-document "$RDS_AUTH_TOKEN_POLICY" \
     --description "Policy for generating RDS auth tokens" \
     --query 'Policy.Arn' \

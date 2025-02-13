@@ -1,0 +1,14 @@
+{
+    "vpc_peerings": [
+        {
+            "requester_peering_id": "",
+            "accepter_vpc_id": "vpc-03f4f0b3d3aaba624",
+            "requester_cidr": "10.143.0.0/16",
+            "rds_security_groups": [
+                "sg-003d1dce2e1bec21f",
+                "sg-0d64a6f99eacb301c",
+                "sg-0100514fe126305e2"
+            ]
+        }
+    ]
+}

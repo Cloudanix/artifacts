@@ -1,0 +1,11 @@
+{
+    "public_rds_configs": [
+         {
+             "requester_cidr": "10.10.0.0/16",
+             "requester_nat_gateway_ip": "43.204.255.148", 
+             "rds_security_groups": [
+                 "sg-0d64a6f99eacb301c"
+             ]
+         }
+     ]
+ }

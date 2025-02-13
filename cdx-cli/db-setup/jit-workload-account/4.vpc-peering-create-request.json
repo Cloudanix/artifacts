@@ -1,13 +1,13 @@
 {
     "vpc_peerings": [
         {
-            "peering_name": "jit-db-vpc",
-            "requester_vpc_id": "vpc-0123456789abcdefg",
-            "accepter_account_id": "01234567890123456",
-            "accepter_vpc_id": "vpc-123456789abcdefgh",
+            "peering_name": "jit-db-vpc-4",
+            "requester_vpc_id": "vpc-0e272e306b45d70d1",
+            "accepter_account_id": "129791448574",
+            "accepter_vpc_id": "vpc-03f4f0b3d3aaba624",
             "accepter_region": "ap-south-1",
-            "accepter_cidr": "127.127.127.127/16",
-            "ecs_security_group_id": "sg-0123456789abcdefg"
+            "accepter_cidr": "10.4.0.0/16",
+            "ecs_security_group_id": "sg-01786cfceadd17774"
         }
     ]
 }

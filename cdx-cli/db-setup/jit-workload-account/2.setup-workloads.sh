@@ -2,6 +2,14 @@
 set -e  
 set -u  
 
+
+prompt_with_default() {
+    local prompt="$1"
+    local default_value="$2"
+    read -p "$prompt [$default_value]: " user_input
+    echo "${user_input:-$default_value}"
+}
+
 # Function to handle errors
 handle_error() {
     local exit_code=$?
@@ -108,24 +116,40 @@ wait_for_namespace() {
     return 1
 }
 
-#Edit
+echo "=== JIT Account Infrastructure Setup ==="
+echo "Please provide the following configuration details:"
+# AWS Configuration
+AWS_REGION=$(prompt_with_default "AWS Region" "ap-south-1")
 ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 echo "Your AWS Account ID is: $ACCOUNT_ID"
-AWS_REGION="ap-south-1"
-PROJECT_NAME="jit-db"
-VPC_CIDR="10.10.0.0/16"
-PRIVATE_SUBNET_1_CIDR="10.10.1.0/24"
-PRIVATE_SUBNET_2_CIDR="10.10.2.0/24"
-PUBLIC_SUBNET_1_CIDR="10.10.3.0/24"
-PUBLIC_SUBNET_2_CIDR="10.10.4.0/24"
-ECS_CLUSTER_NAME="${PROJECT_NAME}-cluster"
-LOG_GROUP_NAME_1="/ecs/${PROJECT_NAME}/cloudanix/ecr-aws-jit-proxy-server"
-LOG_GROUP_NAME_2="/ecs/${PROJECT_NAME}/cloudanix/ecr-aws-jit-proxy-sql"
-SECRET_NAME="CDX_SECRETS"
-CDX_AUTH_TOKEN="AUTH_TOKEN_1234567890"
-CDX_SIGNATURE_SECRET_KEY="SECRET_1234567890"
-CDX_SENTRY_DSN="CDX_SENTRY_DSN"
+# Project Configuration
+PROJECT_NAME=$(prompt_with_default "Project Name" "cdx-jit-db")
+# Network Configuration
+VPC_CIDR=$(prompt_with_default "VPC CIDR Block" "10.142.0.0/16")
+PRIVATE_SUBNET_1_CIDR=$(prompt_with_default "Private Subnet 1 CIDR" "10.142.1.0/24")
+PRIVATE_SUBNET_2_CIDR=$(prompt_with_default "Private Subnet 2 CIDR" "10.142.2.0/24")
+PUBLIC_SUBNET_1_CIDR=$(prompt_with_default "Public Subnet 1 CIDR" "10.142.3.0/24")
+PUBLIC_SUBNET_2_CIDR=$(prompt_with_default "Public Subnet 2 CIDR" "10.142.4.0/24")
+BUCKET_NAME=$(prompt_with_default "Enter S3 bucketname according to cdx-jit-db-logs-<org_name> pattern" "cdx-jit-db-logs--jfinance")
+# ECS Configuration
+ECS_CLUSTER_NAME="cdx-jit-db-cluster"
+LOG_GROUP_NAME_1="/ecs/${PROJECT_NAME}/proxyserver"
+LOG_GROUP_NAME_2="/ecs/${PROJECT_NAME}/proxysql"
+# Secrets Configuration
+SECRET_NAME=$(prompt_with_default "Secrets Manager Secret Name" "CDX_SECRETS")
+CDX_AUTH_TOKEN=$(prompt_with_default "CDX Auth Token" "AUTH_TOKEN_1234567890")
+CDX_SIGNATURE_SECRET_KEY=$(prompt_with_default "CDX Signature Secret Key" "SECRET_1234567890")
+CDX_SENTRY_DSN=$(prompt_with_default "CDX Sentry DSN" "CDX_SENTRY_DSN")
+CDX_DC=$(prompt_with_default "CDX_DC" "IN")
+CDX_API_BASE=$(prompt_with_default "CDX_API_BASE" "https://console-in.cloudanix.com")
 
+
+echo -e "\n=== Configuration Summary ==="
+echo "AWS Region: $AWS_REGION"
+echo "Project Name: $PROJECT_NAME"
+echo "VPC CIDR: $VPC_CIDR"
+echo "ECS Cluster Name: $ECS_CLUSTER_NAME"
+echo "Secrets Name: $SECRET_NAME"
 
 # Create ECS Service Linked Role if it doesn't exist
 log "Creating ECS Service Linked Role..."
@@ -135,20 +159,20 @@ aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com || true
 log "Creating VPC..."
 VPC_ID=$(aws ec2 create-vpc \
     --cidr-block $VPC_CIDR \
-    --tag-specifications "ResourceType=vpc,Tags=[{Key=Name,Value=${PROJECT_NAME}-vpc}]" \
+    --tag-specifications 'ResourceType=vpc,Tags=[{Key=Name,Value='"${PROJECT_NAME}"'-vpc},{Key=Purpose,Value=database-iam-jit},{Key=created_by,Value=cloudanix}]' \
     --query 'Vpc.VpcId' \
     --output text)
 
+# Create Internet Gateway
+IGW_ID=$(aws ec2 create-internet-gateway \
+    --tag-specifications 'ResourceType=internet-gateway,Tags=[{Key=Name,Value='"${PROJECT_NAME}"'-igw},{Key=Purpose,Value=database-iam-jit},{Key=created_by,Value=cloudanix}]' \
+    --query 'InternetGateway.InternetGatewayId' \
+    --output text)
+    
 # Enable DNS hostname for VPC
 aws ec2 modify-vpc-attribute \
     --vpc-id $VPC_ID \
     --enable-dns-hostnames
-
-# Create Internet Gateway
-IGW_ID=$(aws ec2 create-internet-gateway \
-    --tag-specifications "ResourceType=internet-gateway,Tags=[{Key=Name,Value=${PROJECT_NAME}-igw}]" \
-    --query 'InternetGateway.InternetGatewayId' \
-    --output text)
 
 # Attach IGW to VPC
 aws ec2 attach-internet-gateway \
@@ -161,7 +185,7 @@ PRIVATE_SUBNET_1_ID=$(aws ec2 create-subnet \
     --vpc-id $VPC_ID \
     --cidr-block $PRIVATE_SUBNET_1_CIDR \
     --availability-zone "${AWS_REGION}a" \
-    --tag-specifications "ResourceType=subnet,Tags=[{Key=Name,Value=${PROJECT_NAME}-private-1}]" \
+    --tag-specifications "ResourceType=subnet,Tags=[{Key=Name,Value=${PROJECT_NAME}-private-1},{Key=Purpose,Value=database-iam-jit},{Key=created_by,Value=cloudanix}]" \
     --query 'Subnet.SubnetId' \
     --output text)
 
@@ -169,7 +193,7 @@ PRIVATE_SUBNET_2_ID=$(aws ec2 create-subnet \
     --vpc-id $VPC_ID \
     --cidr-block $PRIVATE_SUBNET_2_CIDR \
     --availability-zone "${AWS_REGION}b" \
-    --tag-specifications "ResourceType=subnet,Tags=[{Key=Name,Value=${PROJECT_NAME}-private-2}]" \
+    --tag-specifications "ResourceType=subnet,Tags=[{Key=Name,Value=${PROJECT_NAME}-private-2},{Key=Purpose,Value=database-iam-jit},{Key=created_by,Value=cloudanix}]" \
     --query 'Subnet.SubnetId' \
     --output text)
 
@@ -177,7 +201,7 @@ PUBLIC_SUBNET_1_ID=$(aws ec2 create-subnet \
     --vpc-id $VPC_ID \
     --cidr-block $PUBLIC_SUBNET_1_CIDR \
     --availability-zone "${AWS_REGION}a" \
-    --tag-specifications "ResourceType=subnet,Tags=[{Key=Name,Value=${PROJECT_NAME}-public-1}]" \
+    --tag-specifications "ResourceType=subnet,Tags=[{Key=Name,Value=${PROJECT_NAME}-public-1},{Key=Purpose,Value=database-iam-jit},{Key=created_by,Value=cloudanix}]" \
     --query 'Subnet.SubnetId' \
     --output text)
 
@@ -185,7 +209,7 @@ PUBLIC_SUBNET_2_ID=$(aws ec2 create-subnet \
     --vpc-id $VPC_ID \
     --cidr-block $PUBLIC_SUBNET_2_CIDR \
     --availability-zone "${AWS_REGION}b" \
-    --tag-specifications "ResourceType=subnet,Tags=[{Key=Name,Value=${PROJECT_NAME}-public-2}]" \
+    --tag-specifications "ResourceType=subnet,Tags=[{Key=Name,Value=${PROJECT_NAME}-public-2},{Key=Purpose,Value=database-iam-jit},{Key=created_by,Value=cloudanix}]" \
     --query 'Subnet.SubnetId' \
     --output text)
 
@@ -199,7 +223,7 @@ ELASTIC_IP_ID=$(aws ec2 allocate-address \
 NAT_GATEWAY_ID=$(aws ec2 create-nat-gateway \
     --subnet-id $PUBLIC_SUBNET_1_ID \
     --allocation-id $ELASTIC_IP_ID \
-    --tag-specifications "ResourceType=natgateway,Tags=[{Key=Name,Value=${PROJECT_NAME}-nat}]" \
+    --tag-specifications "ResourceType=natgateway,Tags=[{Key=Name,Value=${PROJECT_NAME}-nat},{Key=Purpose,Value=database-iam-jit},{Key=created_by,Value=cloudanix}]" \
     --query 'NatGateway.NatGatewayId' \
     --output text)
 
@@ -209,13 +233,13 @@ wait_for_nat_gateway "$NAT_GATEWAY_ID"
 log "Creating route tables..."
 PUBLIC_RT_ID=$(aws ec2 create-route-table \
     --vpc-id $VPC_ID \
-    --tag-specifications "ResourceType=route-table,Tags=[{Key=Name,Value=${PROJECT_NAME}-public-rt}]" \
+    --tag-specifications "ResourceType=route-table,Tags=[{Key=Name,Value=${PROJECT_NAME}-public-rt},{Key=Purpose,Value=database-iam-jit},{Key=created_by,Value=cloudanix}]" \
     --query 'RouteTable.RouteTableId' \
     --output text)
 
 PRIVATE_RT_ID=$(aws ec2 create-route-table \
     --vpc-id $VPC_ID \
-    --tag-specifications "ResourceType=route-table,Tags=[{Key=Name,Value=${PROJECT_NAME}-private-rt}]" \
+    --tag-specifications "ResourceType=route-table,Tags=[{Key=Name,Value=${PROJECT_NAME}-private-rt},{Key=Purpose,Value=database-iam-jit},{Key=created_by,Value=cloudanix}]" \
     --query 'RouteTable.RouteTableId' \
     --output text)
 
@@ -252,7 +276,7 @@ log "Creating ECS Task Role and policies..."
 
 # Create the ECS task role
 aws iam create-role \
-    --role-name ECSTaskRole \
+    --role-name cdx-ECSTaskRole \
     --assume-role-policy-document '{
         "Version": "2012-10-17",
         "Statement": [
@@ -268,7 +292,7 @@ aws iam create-role \
 
 # Create custom policy for Secrets Manager access
 aws iam create-policy \
-    --policy-name ECSSecretsAccessPolicy \
+    --policy-name cdx-ECSSecretsAccessPolicy \
     --policy-document '{
         "Version": "2012-10-17",
         "Statement": [
@@ -285,14 +309,15 @@ aws iam create-policy \
 #Edit
 # Create custom policy for RDS role assumption
 aws iam create-policy \
-    --policy-name ECSRDSAssumeRolePolicy \
+    --policy-name cdx-ECSRDSAssumeRolePolicy \
     --policy-document '{
         "Version": "2012-10-17",
         "Statement": [{
             "Effect": "Allow",
             "Action": "sts:AssumeRole",
             "Resource": [
-                "*",
+                "arn:aws:iam::108953788033:role/cdx-us-east-1-774118602354-role_cross_accntb8a9ad6f",
+                "arn:aws:iam::108953788033:role/cdx-us-east-1-774118602354-role_cross_accntaa1187e4"
             ]
         }]
     }'
@@ -300,7 +325,7 @@ aws iam create-policy \
 # Create EFS access policy
 log "Creating EFS access policy..."
 aws iam create-policy \
-    --policy-name EFSAccessPolicy \
+    --policy-name cdx-EFSAccessPolicy \
     --policy-document '{
     "Version": "2012-10-17",
     "Statement": [
@@ -317,34 +342,38 @@ aws iam create-policy \
 }'
 
 # Store policy ARNs in variables
-SECRETS_POLICY_ARN=$(aws iam list-policies --query 'Policies[?PolicyName==`ECSSecretsAccessPolicy`].Arn' --output text)
-RDS_ASSUME_POLICY_ARN=$(aws iam list-policies --query 'Policies[?PolicyName==`ECSRDSAssumeRolePolicy`].Arn' --output text)
-EFS_POLICY_ARN=$(aws iam list-policies --query 'Policies[?PolicyName==`EFSAccessPolicy`].Arn' --output text)
+SECRETS_POLICY_ARN=$(aws iam list-policies --query 'Policies[?PolicyName==`cdx-ECSSecretsAccessPolicy`].Arn' --output text)
+RDS_ASSUME_POLICY_ARN=$(aws iam list-policies --query 'Policies[?PolicyName==`cdx-ECSRDSAssumeRolePolicy`].Arn' --output text)
+EFS_POLICY_ARN=$(aws iam list-policies --query 'Policies[?PolicyName==`cdx-EFSAccessPolicy`].Arn' --output text)
 
 # Attach AWS managed policies
 aws iam attach-role-policy \
-    --role-name ECSTaskRole \
+    --role-name cdx-ECSTaskRole \
     --policy-arn "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 
 aws iam attach-role-policy \
-    --role-name ECSTaskRole \
+    --role-name cdx-ECSTaskRole \
     --policy-arn "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 
 aws iam attach-role-policy \
-    --role-name ECSTaskRole \
+    --role-name cdx-ECSTaskRole \
     --policy-arn "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
+
+aws iam attach-role-policy \
+    --role-name cdx-ECSTaskRole \
+    --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
 
 # Attach custom policies
 aws iam attach-role-policy \
-    --role-name ECSTaskRole \
+    --role-name cdx-ECSTaskRole \
     --policy-arn $SECRETS_POLICY_ARN
 
 aws iam attach-role-policy \
-    --role-name ECSTaskRole \
+    --role-name cdx-ECSTaskRole \
     --policy-arn $RDS_ASSUME_POLICY_ARN
 
 aws iam attach-role-policy \
-    --role-name ECSTaskRole \
+    --role-name cdx-ECSTaskRole \
     --policy-arn $EFS_POLICY_ARN
 
 log "ECS Task Role and policies created successfully"
@@ -353,30 +382,45 @@ log "Creating CloudWatch Log Group..."
 aws logs create-log-group --log-group-name $LOG_GROUP_NAME_1
 aws logs create-log-group --log-group-name $LOG_GROUP_NAME_2
 
+aws logs tag-log-group \
+    --log-group-name $LOG_GROUP_NAME_1 \
+    --tags '{"Purpose": "database-iam-jit", "created_by": "cloudanix"}'
+
+aws logs tag-log-group \
+    --log-group-name $LOG_GROUP_NAME_2 \
+    --tags '{"Purpose": "database-iam-jit", "created_by": "cloudanix"}'
+
 log "Creating Secrets in Secret Manager ..."
 SECRET_ARN=$(aws secretsmanager create-secret \
     --name $SECRET_NAME \
     --description "Secrets for CDX" \
-    --secret-string "{\"CDX_AUTH_TOKEN\": \"$CDX_AUTH_TOKEN\", \"CDX_SIGNATURE_SECRET_KEY\": \"$CDX_SIGNATURE_SECRET_KEY\", \"CDX_SENTRY_DSN\": \"$CDX_SENTRY_DSN\"}" \
+    --secret-string "{\"CDX_AUTH_TOKEN\": \"$CDX_AUTH_TOKEN\", \"CDX_SIGNATURE_SECRET_KEY\": \"$CDX_SIGNATURE_SECRET_KEY\", \"CDX_SENTRY_DSN\": \"$CDX_SENTRY_DSN\", \"CDX_DC\": \"$CDX_DC\", \"CDX_API_BASE\": \"$CDX_API_BASE\", \"CDX_LOGGING_S3_BUCKET\": \"$BUCKET_NAME\"}" \
     --query 'ARN' \
     --output text)
 
 wait_for_secret $SECRET_NAME
 
-echo "Create S3 Bucket"
-BUCKET_NAME="${PROJECT_NAME}-$(date +%Y%m%d%H%M%S)"
+aws secretsmanager tag-resource \
+    --secret-id $SECRET_NAME \
+    --tags '[{"Key":"Purpose","Value":"database-iam-jit"},{"Key":"created_by","Value":"cloudanix"}]'
+
+# Create S3 Bucket 
 echo "Creating S3 Bucket: $BUCKET_NAME"
 aws s3api create-bucket \
     --bucket $BUCKET_NAME \
     --region $AWS_REGION \
     --create-bucket-configuration LocationConstraint=$AWS_REGION
+aws s3api put-bucket-tagging \
+    --bucket $BUCKET_NAME \
+    --tagging '{"TagSet": [{"Key": "Purpose", "Value": "database-iam-jit"}, {"Key": "created_by", "Value": "cloudanix"}]}'
 
 # Create ECS Cluster
 log "Creating ECS Cluster..."
 aws ecs create-cluster \
     --cluster-name $ECS_CLUSTER_NAME \
     --capacity-providers FARGATE FARGATE_SPOT \
-    --default-capacity-provider-strategy capacityProvider=FARGATE,weight=1
+    --default-capacity-provider-strategy capacityProvider=FARGATE,weight=1 \
+    --tags key=Purpose,value=database-iam-jit key=created_by,value=cloudanix
 
 # Create Security Group
 log "Creating Security Group..."
@@ -384,6 +428,7 @@ ECS_SG_ID=$(aws ec2 create-security-group \
     --group-name "${PROJECT_NAME}-ecs-sg" \
     --description "Security group for ECS cluster" \
     --vpc-id $VPC_ID \
+    --tag-specifications 'ResourceType=security-group,Tags=[{Key=Name,Value='${PROJECT_NAME}'-ecs-sg},{Key=Purpose,Value=database-iam-jit},{Key=created_by,Value=cloudanix}]' \
     --query 'GroupId' \
     --output text)
 
@@ -424,7 +469,7 @@ EFS_ID=$(aws efs create-file-system \
     --performance-mode generalPurpose \
     --throughput-mode bursting \
     --encrypted \
-    --tags Key=Name,Value=${PROJECT_NAME}-efs \
+    --tags '[{"Key":"Name","Value":"'${PROJECT_NAME}'-efs"}, {"Key":"Purpose","Value":"database-iam-jit"}, {"Key":"created_by","Value":"cloudanix"}]' \
     --query 'FileSystemId' \
     --output text)
 
@@ -466,6 +511,22 @@ ACCESS_POINT_ID=$(aws efs create-access-point \
     --query 'AccessPointId' \
     --output text)
 
+REPOSITORIES=("cloudanix/ecr-aws-jit-proxy-sql" "cloudanix/ecr-aws-jit-proxy-server")
+
+log "Tagging specified ECR repositories..."
+for repo in "${REPOSITORIES[@]}"; do
+    REPO_ARN=$(aws ecr describe-repositories --repository-names "$repo" \
+        --query 'repositories[0].repositoryArn' --output text 2>/dev/null)
+
+    if [ -n "$REPO_ARN" ] && [ "$REPO_ARN" != "None" ]; then
+        aws ecr tag-resource --resource-arn "$REPO_ARN" \
+            --tags "Key=Name,Value=${repo}" "Key=purpose,Value=database-iam-jit" "Key=created_by,Value=cloudanix"|| \
+            log "Warning: Failed to tag ECR repository $repo"
+        log "Tagged ECR repository: $repo"
+    else
+        log "Warning: Repository $repo not found!"
+    fi
+done
 
 cat <<EOF >  "proxyserver-task-definition.json"
 {
@@ -493,27 +554,41 @@ cat <<EOF >  "proxyserver-task-definition.json"
                 {
                     "name": "PROXYSQL_HOST",
                     "value": "proxysql"
-                },
-                {
-                    "name": "S3_BUCKET_NAME",
-                    "value": "$BUCKET_NAME"
                 }
             ],
             "secrets": [
                 {
-                  "name": "CDX_AUTH_TOKEN",
-                  "valueFrom": "$SECRET_ARN:CDX_AUTH_TOKEN::"
+                    "name": "CDX_AUTH_TOKEN",
+                    "valueFrom": "$SECRET_ARN:CDX_AUTH_TOKEN::"
                 },
                 {
-                  "name": "CDX_SIGNATURE_SECRET_KEY",
-                  "valueFrom": "$SECRET_ARN:CDX_SIGNATURE_SECRET_KEY::"
+                    "name": "CDX_SIGNATURE_SECRET_KEY",
+                    "valueFrom": "$SECRET_ARN:CDX_SIGNATURE_SECRET_KEY::"
                 },
                 {
-                  "name": "CDX_SENTRY_DSN",
-                  "valueFrom": "$SECRET_ARN:CDX_SENTRY_DSN::"
+                    "name": "CDX_SENTRY_DSN",
+                    "valueFrom": "$SECRET_ARN:CDX_SENTRY_DSN::"
+                },
+                {
+                    "name": "CDX_DC",
+                    "valueFrom": "$SECRET_ARN:CDX_DC::"
+                },
+                {
+                    "name": "CDX_API_BASE",
+                    "valueFrom": "$SECRET_ARN:CDX_API_BASE::"
+                },
+                {
+                    "name": "CDX_LOGGING_S3_BUCKET",
+                    "valueFrom": "$SECRET_ARN:CDX_LOGGING_S3_BUCKET::"
                 }
-              ],
-            "mountPoints": [],
+            ],
+            "mountPoints": [
+                {
+                    "sourceVolume": "proxysql-data",
+                    "containerPath": "/var/lib/proxysql",
+                    "readOnly": false
+                }
+            ],
             "volumesFrom": [],
             "logConfiguration": {
                 "logDriver": "awslogs",
@@ -526,10 +601,24 @@ cat <<EOF >  "proxyserver-task-definition.json"
             "systemControls": []
         }
     ],
-    "taskRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/ECSTaskRole",
-    "executionRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/ECSTaskRole",
+    "taskRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/cdx-ECSTaskRole",
+    "executionRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/cdx-ECSTaskRole",
     "networkMode": "awsvpc",
-    "volumes": [],
+    "volumes": [
+        {
+            "name": "proxysql-data",
+            "efsVolumeConfiguration": {
+                "fileSystemId": "$EFS_ID",
+                "rootDirectory": "/",
+                "transitEncryption": "ENABLED",
+                "transitEncryptionPort": 2049,
+                "authorizationConfig": {
+                    "accessPointId": "$ACCESS_POINT_ID",
+                    "iam": "ENABLED"
+                }
+            }
+        }
+    ],
     "placementConstraints": [],
     "requiresCompatibilities": [
         "FARGATE"
@@ -582,8 +671,8 @@ cat <<EOF >  "proxysql-task-definition.json"
             "systemControls": []
         }
     ],
-    "taskRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/ECSTaskRole",
-    "executionRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/ECSTaskRole",
+    "taskRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/cdx-ECSTaskRole",
+    "executionRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/cdx-ECSTaskRole",
     "networkMode": "awsvpc",
     "volumes": [
         {
@@ -611,8 +700,11 @@ EOF
 
 # Register Task Definitions
 log "Registering Task Definitions..."
-aws ecs register-task-definition --cli-input-json file://proxyserver-task-definition.json
-aws ecs register-task-definition --cli-input-json file://proxysql-task-definition.json
+TASK_ARN=$(aws ecs register-task-definition --cli-input-json file://proxyserver-task-definition.json --query 'taskDefinition.taskDefinitionArn' --output text)
+aws ecs tag-resource --resource-arn "$TASK_ARN" --tags key=Purpose,value=database-iam-jit key=created_by,value=cloudanix
+
+TASK_ARN=$(aws ecs register-task-definition --cli-input-json file://proxysql-task-definition.json --query 'taskDefinition.taskDefinitionArn' --output text)
+aws ecs tag-resource --resource-arn "$TASK_ARN" --tags key=Purpose,value=database-iam-jit key=created_by,value=cloudanix
 
 # Create Service Connect namespace
 log "Creating Service Connect namespace..."
@@ -635,6 +727,7 @@ aws ecs create-service \
     --cluster $ECS_CLUSTER_NAME \
     --service-name proxysql \
     --task-definition proxysql \
+    --tags key=Purpose,value=database-iam-jit key=created_by,value=cloudanix \
     --desired-count 1 \
     --launch-type FARGATE \
     --platform-version LATEST \
@@ -658,6 +751,7 @@ aws ecs create-service \
     --cluster $ECS_CLUSTER_NAME \
     --service-name proxyserver \
     --task-definition proxyserver-task \
+    --tags key=Purpose,value=database-iam-jit key=created_by,value=cloudanix \
     --desired-count 2 \
     --launch-type FARGATE \
     --platform-version LATEST \
