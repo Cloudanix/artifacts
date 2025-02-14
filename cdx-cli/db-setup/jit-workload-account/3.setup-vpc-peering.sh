@@ -63,7 +63,7 @@ create_vpc_peering() {
         --peer-owner-id "$accepter_account_id" \
         --peer-vpc-id "$accepter_vpc_id" \
         --peer-region "$accepter_region" \
-        --tag-specifications "ResourceType=vpc-peering-connection,Tags=[{Key=Name,Value=${peering_name}-peering}]" \
+        --tag-specifications "ResourceType=vpc-peering-connection,Tags=[{Key=Name,Value=${peering_name}-peering},{Key=Purpose,Value=database-iam-jit}]" \
         --query 'VpcPeeringConnection.VpcPeeringConnectionId' \
         --output text 2>/dev/null)
 

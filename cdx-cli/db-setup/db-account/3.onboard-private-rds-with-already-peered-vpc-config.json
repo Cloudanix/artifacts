@@ -1,0 +1,12 @@
+{
+    "private_rds_configs": [
+         {
+             "requester_cidr": "10.143.0.0/16",
+             "rds_security_groups": [
+                 "sg-00xxxxxxxxx",
+                 "sg-0dxxxxxxxxx",
+                 "sg-01xxxxxxxxx"
+             ]
+         }
+     ]
+ }
