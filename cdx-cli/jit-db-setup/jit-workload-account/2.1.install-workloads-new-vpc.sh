@@ -135,13 +135,14 @@ BUCKET_NAME=$(prompt_with_default "Enter S3 bucketname according to cdx-jit-db-l
 ECS_CLUSTER_NAME="cdx-jit-db-cluster"
 LOG_GROUP_NAME_1="/ecs/${PROJECT_NAME}/proxyserver"
 LOG_GROUP_NAME_2="/ecs/${PROJECT_NAME}/proxysql"
+LOG_GROUP_NAME_3="/ecs/${PROJECT_NAME}/query-logging"
 # Secrets Configuration
 SECRET_NAME=$(prompt_with_default "Secrets Manager Secret Name" "CDX_SECRETS")
 CDX_AUTH_TOKEN=$(prompt_with_default "CDX Auth Token" "AUTH_TOKEN_1234567890")
 CDX_SIGNATURE_SECRET_KEY=$(prompt_with_default "CDX Signature Secret Key" "SECRET_1234567890")
 CDX_SENTRY_DSN=$(prompt_with_default "CDX Sentry DSN" "CDX_SENTRY_DSN")
-CDX_DC=$(prompt_with_default "CDX_DC" "IN")
-CDX_API_BASE=$(prompt_with_default "CDX_API_BASE" "https://console-in.cloudanix.com")
+CDX_DC=$(prompt_with_default "CDX_DC" "US")
+CDX_API_BASE=$(prompt_with_default "CDX_API_BASE" "https://console.cloudanix.com")
 
 
 echo -e "\n=== Configuration Summary ==="
@@ -381,6 +382,7 @@ log "ECS Task Role and policies created successfully"
 log "Creating CloudWatch Log Group..."
 aws logs create-log-group --log-group-name $LOG_GROUP_NAME_1
 aws logs create-log-group --log-group-name $LOG_GROUP_NAME_2
+aws logs create-log-group --log-group-name $LOG_GROUP_NAME_3
 
 aws logs tag-log-group \
     --log-group-name $LOG_GROUP_NAME_1 \
@@ -511,7 +513,8 @@ ACCESS_POINT_ID=$(aws efs create-access-point \
     --query 'AccessPointId' \
     --output text)
 
-REPOSITORIES=("cloudanix/ecr-aws-jit-proxy-sql" "cloudanix/ecr-aws-jit-proxy-server")
+REPOSITORIES=("cloudanix/ecr-aws-jit-proxy-sql" "cloudanix/ecr-aws-jit-proxy-server" "cloudanix/ecr-aws-jit-query-logging")
+
 
 log "Tagging specified ECR repositories..."
 for repo in "${REPOSITORIES[@]}"; do
@@ -698,6 +701,106 @@ cat <<EOF >  "proxysql-task-definition.json"
 }
 EOF
 
+cat <<EOF > "query-logging-task-definition.json"
+{
+    "family": "query-logging-task",
+    "containerDefinitions": [
+        {
+            "name": "query-logging",
+            "image": "$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/cloudanix/ecr-aws-jit-query-logging:latest",
+            "cpu": 0,
+            "portMappings": [
+                {
+                    "name": "query-logging-port",
+                    "containerPort": 8079,
+                    "hostPort": 8079,
+                    "protocol": "tcp",
+                    "appProtocol": "http"
+                }
+            ],
+            "essential": true,
+            "environment": [
+                {
+                    "name": "AWS_DEFAULT_REGION",
+                    "value": "$AWS_REGION"
+                },
+                {
+                    "name": "CDX_APP_ENV",
+                    "value": "production"
+                },
+                {
+                    "name": "CDX_LOG_LEVEL",
+                    "value": "INFO"
+                },
+                {
+                    "name": "CDX_DEFAULT_REGION",
+                    "value": "$AWS_REGION"
+                },
+                {
+                    "name": "CDX_SERVER_VERSION",
+                    "value": "1.0.0"
+                }
+            ],
+            "mountPoints": [
+                {
+                    "sourceVolume": "proxysql-data",
+                    "containerPath": "/var/lib/proxysql",
+                    "readOnly": false
+                }
+            ],
+            "volumesFrom": [],
+            "secrets": [
+                {
+                    "name": "CDX_DC",
+                    "valueFrom": "$SECRET_ARN:CDX_DC::"
+                },
+                {
+                    "name": "CDX_LOGGING_S3_BUCKET",
+                    "valueFrom": "$SECRET_ARN:CDX_LOGGING_S3_BUCKET::"
+                },
+                {
+                    "name": "CDX_SENTRY_DSN",
+                    "valueFrom": "$SECRET_ARN:CDX_SENTRY_DSN::"
+                }
+            ],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "/ecs/${PROJECT_NAME}/query-logging",
+                    "awslogs-region": "$AWS_REGION",
+                    "awslogs-stream-prefix": "ecs"
+                }
+            },
+            "systemControls": []
+        }
+    ],
+    "taskRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/cdx-ECSTaskRole",
+    "executionRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/cdx-ECSTaskRole",
+    "networkMode": "awsvpc",
+    "volumes": [
+        {
+            "name": "proxysql-data",
+            "efsVolumeConfiguration": {
+                "fileSystemId": "$EFS_ID",
+                "rootDirectory": "/",
+                "transitEncryption": "ENABLED",
+                "transitEncryptionPort": 2049,
+                "authorizationConfig": {
+                    "accessPointId": "$ACCESS_POINT_ID",
+                    "iam": "ENABLED"
+                }
+            }
+        }
+    ],
+    "placementConstraints": [],
+    "requiresCompatibilities": [
+        "FARGATE"
+    ],
+    "cpu": "1024",
+    "memory": "2048"
+}
+EOF
+
 # Register Task Definitions
 log "Registering Task Definitions..."
 TASK_ARN=$(aws ecs register-task-definition --cli-input-json file://proxyserver-task-definition.json --query 'taskDefinition.taskDefinitionArn' --output text)
@@ -705,6 +808,10 @@ aws ecs tag-resource --resource-arn "$TASK_ARN" --tags key=Purpose,value=databas
 
 TASK_ARN=$(aws ecs register-task-definition --cli-input-json file://proxysql-task-definition.json --query 'taskDefinition.taskDefinitionArn' --output text)
 aws ecs tag-resource --resource-arn "$TASK_ARN" --tags key=Purpose,value=database-iam-jit key=created_by,value=cloudanix
+
+TASK_ARN=$(aws ecs register-task-definition --cli-input-json file://query-logging-task-definition.json --query 'taskDefinition.taskDefinitionArn' --output text)
+aws ecs tag-resource --resource-arn "$TASK_ARN" --tags key=Purpose,value=database-iam-jit key=created_by,value=cloudanix
+
 
 # Create Service Connect namespace
 log "Creating Service Connect namespace..."
@@ -753,6 +860,23 @@ aws ecs create-service \
     --task-definition proxyserver-task \
     --tags key=Purpose,value=database-iam-jit key=created_by,value=cloudanix \
     --desired-count 2 \
+    --launch-type FARGATE \
+    --platform-version LATEST \
+    --network-configuration "awsvpcConfiguration={subnets=[$PRIVATE_SUBNET_1_ID,$PRIVATE_SUBNET_2_ID],securityGroups=[$ECS_SG_ID],assignPublicIp=DISABLED}" \
+    --enable-execute-command \
+    --service-connect-configuration '{
+        "enabled": true,
+        "namespace": "proxysql-proxyserver",
+        "services": []
+    }'
+
+log "Creating query-logging service..."
+aws ecs create-service \
+    --cluster $ECS_CLUSTER_NAME \
+    --service-name query-logging \
+    --task-definition query-logging-task \
+    --tags key=Purpose,value=database-iam-jit key=created_by,value=cloudanix \
+    --desired-count 1 \
     --launch-type FARGATE \
     --platform-version LATEST \
     --network-configuration "awsvpcConfiguration={subnets=[$PRIVATE_SUBNET_1_ID,$PRIVATE_SUBNET_2_ID],securityGroups=[$ECS_SG_ID],assignPublicIp=DISABLED}" \

@@ -40,7 +40,7 @@ echo "Your AWS Account ID is: $TARGET_ACCOUNT_ID"
 SOURCE_REGION="us-east-2"
 TARGET_REGION=$(prompt_with_default "Enter the region of jit db setup" "ap-south-1")
 
-REPOSITORIES=("cloudanix/ecr-aws-jit-proxy-sql" "cloudanix/ecr-aws-jit-proxy-server")
+REPOSITORIES=("cloudanix/ecr-aws-jit-proxy-sql" "cloudanix/ecr-aws-jit-proxy-server" "cloudanix/ecr-aws-jit-query-logging")
 IMAGE_TAG="latest"
 PLATFORM="linux/amd64"
 
