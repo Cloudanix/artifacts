@@ -38,7 +38,7 @@ TARGET_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 echo "Your AWS Account ID is: $TARGET_ACCOUNT_ID"
 
 SOURCE_REGION="us-east-2"
-TARGET_REGION=$(prompt_with_default "Enter the region of jit db setup" "ap-south-1")
+TARGET_REGION=$(prompt_with_default "Enter the region of jit db setup" "us-east-1")
 
 REPOSITORIES=("cloudanix/ecr-aws-jit-proxy-sql" "cloudanix/ecr-aws-jit-proxy-server" "cloudanix/ecr-aws-jit-query-logging")
 IMAGE_TAG="latest"
@@ -78,3 +78,15 @@ for REPO in "${REPOSITORIES[@]}"; do
 done
 
 echo "Image transfer complete for all repositories."
+
+
+ECS_SERVICES=("query-logging" "proxysql" "proxyserver")
+# Loop through ECS Services
+for ECS_SERVICE in "${ECS_SERVICES[@]}"; do
+    echo "Updating ecs service: $ECS_SERVICE"
+
+    aws ecs update-service --cluster cdx-jit-db-cluster --service $ECS_SERVICE --force-new-deployment --region $TARGET_REGION  --output text > /dev/null
+
+done
+
+echo "Services Updated for all ECS Services."
