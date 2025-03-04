@@ -38,9 +38,9 @@ TARGET_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 echo "Your AWS Account ID is: $TARGET_ACCOUNT_ID"
 
 SOURCE_REGION="us-east-2"
-TARGET_REGION=$(prompt_with_default "Enter the region of jit db setup" "us-east-1")
+TARGET_REGION=$(prompt_with_default "Enter the region of jit db setup" "ap-south-1")
 
-REPOSITORIES=("cloudanix/ecr-aws-jit-proxy-sql" "cloudanix/ecr-aws-jit-proxy-server" "cloudanix/ecr-aws-jit-query-logging")
+REPOSITORIES=("cloudanix/ecr-aws-jit-proxy-sql" "cloudanix/ecr-aws-jit-query-logging" "cloudanix/ecr-aws-jit-proxy-server")
 IMAGE_TAG="latest"
 PLATFORM="linux/amd64"
 
@@ -52,6 +52,7 @@ aws ecr get-login-password --region "$SOURCE_REGION" | docker login --username A
 echo "Authenticating to the target account ECR..."
 aws ecr get-login-password --region "$TARGET_REGION" | docker login --username AWS --password-stdin "$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com"
 
+REPOSITORIES=("cloudanix/ecr-aws-jit-proxy-sql" "cloudanix/ecr-aws-jit-query-logging" "cloudanix/ecr-aws-jit-proxy-server")
 # Loop through repositories
 for REPO in "${REPOSITORIES[@]}"; do
     echo "Processing repository: $REPO"
@@ -80,7 +81,7 @@ done
 echo "Image transfer complete for all repositories."
 
 
-ECS_SERVICES=("query-logging" "proxysql" "proxyserver")
+ECS_SERVICES=("proxysql" "query-logging" "proxyserver")
 # Loop through ECS Services
 for ECS_SERVICE in "${ECS_SERVICES[@]}"; do
     echo "Updating ecs service: $ECS_SERVICE"
