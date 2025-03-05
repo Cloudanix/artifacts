@@ -119,11 +119,11 @@ wait_for_namespace() {
 echo "=== JIT Account Infrastructure Setup ==="
 echo "Please provide the following configuration details:"
 # AWS Configuration
-AWS_REGION=$(prompt_with_default "AWS Region" "ap-south-1")
+AWS_REGION=$(prompt_with_default "AWS Region" "us-east-1")
 ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 echo "Your AWS Account ID is: $ACCOUNT_ID"
 # Project Configuration
-PROJECT_NAME=$(prompt_with_default "Project Name" "cdx-jit-db")
+PROJECT_NAME="cdx-jit-db"
 # Network Configuration
 VPC_CIDR=$(prompt_with_default "VPC CIDR Block" "10.x.0.0/16")
 PRIVATE_SUBNET_1_CIDR=$(prompt_with_default "Private Subnet 1 CIDR" "10.x.1.0/24")
@@ -730,7 +730,7 @@ cat <<EOF > "query-logging-task-definition.json"
                 },
                 {
                     "name": "CDX_LOG_LEVEL",
-                    "value": "INFO"
+                    "value": "DEBUG"
                 },
                 {
                     "name": "CDX_DEFAULT_REGION",
