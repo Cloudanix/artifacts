@@ -50,17 +50,26 @@ wait_for_endpoint() {
 }
 
 # Function to wait for the secret to exist
-check_secret_exists() {
+wait_for_secret() {
     local secret_name=$1
+    local max_attempts=10
+    local wait_time=30
+    local attempt=1
     
-    log "Checking if secret ${secret_name} exists..."
-    if aws secretsmanager describe-secret --secret-id "${secret_name}" --query "Name" --output text 2>/dev/null | grep -q "${secret_name}"; then
-        log "Secret ${secret_name} exists."
-        return 0
-    else
-        log "Secret ${secret_name} does not exist."
-        return 1
-    fi
+    echo "Waiting for secret ${secret_name} to be available..."
+    
+    # Poll for the secret's existence using describe-secret
+    while [ $attempt -le $max_attempts ]; do
+        if aws secretsmanager describe-secret --secret-id "${secret_name}" --query "Name" --output text | grep -q "${secret_name}"; then
+            echo "Secret ${secret_name} is available."
+            return 0
+        fi
+        echo "Attempt $attempt of $max_attempts, waiting ${wait_time} seconds..."
+        sleep $wait_time
+        attempt=$((attempt + 1))
+    done
+    echo "Secret creation verification failed."
+    return 1
 }
 
 # Function to wait for namespace
@@ -115,7 +124,7 @@ PUBLIC_SUBNET_1_ID=$(prompt_with_default "Public Subnet 1 ID" "subnet-xxxxxxxx")
 PUBLIC_SUBNET_2_ID=$(prompt_with_default "Public Subnet 2 ID" "subnet-xxxxxxxx")
 
 # Bucket details - using different bucket name for log storage
-BUCKET_NAME=$(prompt_with_default "Enter unique S3 bucketname according to cdx-jit-db-logs-<org_name> pattern" "cdx-jit-db-logs")
+BUCKET_NAME=$(prompt_with_default "Enter unique S3 bucket name according to cdx-jit-db-logs-<org_name> pattern" "cdx-jit-db-logs")
 
 # ECS Configuration with unique names
 ECS_CLUSTER_NAME="${PROJECT_NAME}-cluster-${SETUP_NUMBER}"
@@ -123,23 +132,28 @@ LOG_GROUP_NAME_1="/ecs/${PROJECT_NAME}/proxyserver-${SETUP_NUMBER}"
 LOG_GROUP_NAME_2="/ecs/${PROJECT_NAME}/proxysql-${SETUP_NUMBER}"
 LOG_GROUP_NAME_3="/ecs/${PROJECT_NAME}/query-logging-${SETUP_NUMBER}"
 
-# Existing Secret details
-SECRET_NAME=$(prompt_with_default "Existing Secrets Manager Secret Name" "CDX_SECRETS")
+# Secrets Configuration
+SECRET_NAME=$(prompt_with_default "Secrets Manager Secret Name" "CDX_SECRETS")
+CDX_AUTH_TOKEN=$(prompt_with_default "CDX Auth Token" "AUTH_TOKEN_1234567890")
+CDX_SIGNATURE_SECRET_KEY=$(prompt_with_default "CDX Signature Secret Key" "SECRET_1234567890")
+CDX_SENTRY_DSN=$(prompt_with_default "CDX Sentry DSN" "CDX_SENTRY_DSN")
+CDX_DC=$(prompt_with_default "CDX_DC" "US")
+CDX_API_BASE=$(prompt_with_default "CDX_API_BASE" "https://console.cloudanix.com")
 
-# Check if required resources exist
-if ! check_secret_exists "$SECRET_NAME"; then
-    echo "Error: Secret $SECRET_NAME does not exist. Please create it first."
-    exit 1
-fi
+log "Creating Secrets in Secret Manager ..."
+SECRET_ARN=$(aws secretsmanager create-secret \
+    --name $SECRET_NAME \
+    --description "Secrets for CDX" \
+    --secret-string "{\"CDX_AUTH_TOKEN\": \"$CDX_AUTH_TOKEN\", \"CDX_SIGNATURE_SECRET_KEY\": \"$CDX_SIGNATURE_SECRET_KEY\", \"CDX_SENTRY_DSN\": \"$CDX_SENTRY_DSN\", \"CDX_DC\": \"$CDX_DC\", \"CDX_API_BASE\": \"$CDX_API_BASE\", \"CDX_LOGGING_S3_BUCKET\": \"$BUCKET_NAME\"}" \
+    --query 'ARN' \
+    --output text)
 
-if ! check_role_exists "cdx-ECSTaskRole"; then
-    echo "Error: IAM role cdx-ECSTaskRole does not exist. Please create it first."
-    exit 1
-fi
+wait_for_secret $SECRET_NAME
 
-# Get the Secret ARN for referencing in task definitions
-SECRET_ARN=$(aws secretsmanager describe-secret --secret-id $SECRET_NAME --query 'ARN' --output text)
-log "Found Secret ARN: $SECRET_ARN"
+aws secretsmanager tag-resource \
+    --secret-id $SECRET_NAME \
+    --tags '[{"Key":"Purpose","Value":"database-iam-jit"},{"Key":"created_by","Value":"cloudanix"}]'
+echo "Secret created with ARN: $SECRET_ARN"
 
 echo -e "\n=== Configuration Summary ==="
 echo "AWS Region: $AWS_REGION"

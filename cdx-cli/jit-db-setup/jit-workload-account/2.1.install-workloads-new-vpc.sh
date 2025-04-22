@@ -2,7 +2,6 @@
 set -e  
 set -u  
 
-
 prompt_with_default() {
     local prompt="$1"
     local default_value="$2"
@@ -118,6 +117,7 @@ wait_for_namespace() {
 
 echo "=== JIT Account Infrastructure Setup ==="
 echo "Please provide the following configuration details:"
+
 # AWS Configuration
 AWS_REGION=$(prompt_with_default "AWS Region" "us-east-1")
 ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
@@ -130,12 +130,14 @@ PRIVATE_SUBNET_1_CIDR=$(prompt_with_default "Private Subnet 1 CIDR" "10.x.1.0/24
 PRIVATE_SUBNET_2_CIDR=$(prompt_with_default "Private Subnet 2 CIDR" "10.x.2.0/24")
 PUBLIC_SUBNET_1_CIDR=$(prompt_with_default "Public Subnet 1 CIDR" "10.x.3.0/24")
 PUBLIC_SUBNET_2_CIDR=$(prompt_with_default "Public Subnet 2 CIDR" "10.x.4.0/24")
-BUCKET_NAME=$(prompt_with_default "Enter S3 bucketname according to cdx-jit-db-logs-<org_name> pattern" "cdx-jit-db-logs--jfinance")
+
+BUCKET_NAME=$(prompt_with_default "Enter S3 bucket name according to cdx-jit-db-logs-<org_name> pattern" "cdx-jit-db-logs-finance")
 # ECS Configuration
 ECS_CLUSTER_NAME="cdx-jit-db-cluster"
 LOG_GROUP_NAME_1="/ecs/${PROJECT_NAME}/proxyserver"
 LOG_GROUP_NAME_2="/ecs/${PROJECT_NAME}/proxysql"
 LOG_GROUP_NAME_3="/ecs/${PROJECT_NAME}/query-logging"
+
 # Secrets Configuration
 SECRET_NAME=$(prompt_with_default "Secrets Manager Secret Name" "CDX_SECRETS")
 CDX_AUTH_TOKEN=$(prompt_with_default "CDX Auth Token" "AUTH_TOKEN_1234567890")
@@ -143,7 +145,6 @@ CDX_SIGNATURE_SECRET_KEY=$(prompt_with_default "CDX Signature Secret Key" "SECRE
 CDX_SENTRY_DSN=$(prompt_with_default "CDX Sentry DSN" "CDX_SENTRY_DSN")
 CDX_DC=$(prompt_with_default "CDX_DC" "US")
 CDX_API_BASE=$(prompt_with_default "CDX_API_BASE" "https://console.cloudanix.com")
-
 
 echo -e "\n=== Configuration Summary ==="
 echo "AWS Region: $AWS_REGION"

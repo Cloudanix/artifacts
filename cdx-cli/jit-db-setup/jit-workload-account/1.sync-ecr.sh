@@ -38,7 +38,8 @@ TARGET_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 echo "Your AWS Account ID is: $TARGET_ACCOUNT_ID"
 
 SOURCE_REGION="us-east-2"
-TARGET_REGION=$(prompt_with_default "Enter the region of jit db setup" "us-east-1")
+TARGET_REGION_INPUT="${1-"us-east-1"}"
+TARGET_REGION=$(prompt_with_default "Enter the region of jit db setup" "$TARGET_REGION_INPUT")
 
 IMAGE_TAG="latest"
 PLATFORM="linux/amd64"
