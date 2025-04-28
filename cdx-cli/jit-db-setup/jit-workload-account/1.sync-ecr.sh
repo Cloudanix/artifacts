@@ -86,9 +86,14 @@ ECS_SERVICES=("proxysql" "query-logging" "proxyserver")
 for ECS_SERVICE in "${ECS_SERVICES[@]}"; do
     echo "Updating ecs service: $ECS_SERVICE"
 
-    aws ecs update-service --cluster jit-db-cluster --service $ECS_SERVICE --force-new-deployment --region $TARGET_REGION  --output text > /dev/null
+    for CLUSTER in "jit-db-cluster" "cdx-jit-db-cluster" "cdx-jit-db-cluster-2" "cdx-jit-db-cluster-3" "cdx-jit-db-cluster-4"; do
+        if aws ecs describe-clusters --clusters "$CLUSTER" --region "$TARGET_REGION" --query "clusters[?status=='ACTIVE'] | length(@)" --output text | grep -q "1"; then
+            echo "Updating $CLUSTER. service $ECS_SERVICE..."
+            aws ecs update-service --cluster "$CLUSTER" --service "$ECS_SERVICE" --force-new-deployment --region "$TARGET_REGION" --output text > /dev/null
+        fi
+    done
 
-    aws ecs update-service --cluster cdx-jit-db-cluster --service $ECS_SERVICE --force-new-deployment --region $TARGET_REGION  --output text > /dev/null
+    sleep 30
 
 done
 
