@@ -50,17 +50,26 @@ wait_for_endpoint() {
 }
 
 # Function to wait for the secret to exist
-check_secret_exists() {
+wait_for_secret() {
     local secret_name=$1
+    local max_attempts=10
+    local wait_time=30
+    local attempt=1
     
-    log "Checking if secret ${secret_name} exists..."
-    if aws secretsmanager describe-secret --secret-id "${secret_name}" --query "Name" --output text 2>/dev/null | grep -q "${secret_name}"; then
-        log "Secret ${secret_name} exists."
-        return 0
-    else
-        log "Secret ${secret_name} does not exist."
-        return 1
-    fi
+    echo "Waiting for secret ${secret_name} to be available..."
+    
+    # Poll for the secret's existence using describe-secret
+    while [ $attempt -le $max_attempts ]; do
+        if aws secretsmanager describe-secret --secret-id "${secret_name}" --query "Name" --output text | grep -q "${secret_name}"; then
+            echo "Secret ${secret_name} is available."
+            return 0
+        fi
+        echo "Attempt $attempt of $max_attempts, waiting ${wait_time} seconds..."
+        sleep $wait_time
+        attempt=$((attempt + 1))
+    done
+    echo "Secret creation verification failed."
+    return 1
 }
 
 # Function to wait for namespace
@@ -98,6 +107,46 @@ check_role_exists() {
     fi
 }
 
+# === Extend IAM Policies with New Resources ===
+
+extend_policy() {
+  local policy_name=$1
+  shift
+  local new_resources=("$@")
+  local policy_arn="arn:aws:iam::$ACCOUNT_ID:policy/$policy_name"
+
+  log "Extending IAM policy: $policy_name"
+
+  version_id=$(aws iam get-policy --policy-arn $policy_arn --query 'Policy.DefaultVersionId' --output text)
+
+  aws iam get-policy-version \
+    --policy-arn $policy_arn \
+    --version-id $version_id \
+    --query 'PolicyVersion.Document' \
+    --output json > tmp-policy.json
+
+  jq --argjson newResources "$(printf '%s\n' "${new_resources[@]}" | jq -R . | jq -s .)" \
+    '(.Statement[0].Resource) |= (. + $newResources | unique)' \
+    tmp-policy.json > updated-policy.json
+
+  version_count=$(aws iam list-policy-versions --policy-arn $policy_arn --query 'Versions' | jq length)
+  if [ "$version_count" -ge 5 ]; then
+    old_version=$(aws iam list-policy-versions --policy-arn $policy_arn \
+      --query 'Versions[?IsDefaultVersion==`false`].[VersionId]' \
+      --output text | head -n 1)
+    aws iam delete-policy-version --policy-arn $policy_arn --version-id $old_version
+    log "Deleted old policy version: $old_version"
+  fi
+
+  aws iam create-policy-version \
+    --policy-arn $policy_arn \
+    --policy-document file://updated-policy.json \
+    --set-as-default > /dev/null
+
+  rm -f tmp-policy.json updated-policy.json
+  log "Updated policy: $policy_name with new resources."
+}
+
 echo "=== JIT Account Infrastructure Setup - Additional VPC ==="
 echo "Please provide the following configuration details:"
 
@@ -115,7 +164,7 @@ PUBLIC_SUBNET_1_ID=$(prompt_with_default "Public Subnet 1 ID" "subnet-xxxxxxxx")
 PUBLIC_SUBNET_2_ID=$(prompt_with_default "Public Subnet 2 ID" "subnet-xxxxxxxx")
 
 # Bucket details - using different bucket name for log storage
-BUCKET_NAME=$(prompt_with_default "Enter unique S3 bucketname according to cdx-jit-db-logs-<org_name> pattern" "cdx-jit-db-logs")
+BUCKET_NAME=$(prompt_with_default "Enter unique S3 bucket name according to cdx-jit-db-logs-<org_name> pattern" "cdx-jit-db-logs")
 
 # ECS Configuration with unique names
 ECS_CLUSTER_NAME="${PROJECT_NAME}-cluster-${SETUP_NUMBER}"
@@ -123,23 +172,28 @@ LOG_GROUP_NAME_1="/ecs/${PROJECT_NAME}/proxyserver-${SETUP_NUMBER}"
 LOG_GROUP_NAME_2="/ecs/${PROJECT_NAME}/proxysql-${SETUP_NUMBER}"
 LOG_GROUP_NAME_3="/ecs/${PROJECT_NAME}/query-logging-${SETUP_NUMBER}"
 
-# Existing Secret details
-SECRET_NAME=$(prompt_with_default "Existing Secrets Manager Secret Name" "CDX_SECRETS")
+# Secrets Configuration
+SECRET_NAME=$(prompt_with_default "Secrets Manager Secret Name" "CDX_SECRETS")
+CDX_AUTH_TOKEN=$(prompt_with_default "CDX Auth Token" "AUTH_TOKEN_1234567890")
+CDX_SIGNATURE_SECRET_KEY=$(prompt_with_default "CDX Signature Secret Key" "SECRET_1234567890")
+CDX_SENTRY_DSN=$(prompt_with_default "CDX Sentry DSN" "CDX_SENTRY_DSN")
+CDX_DC=$(prompt_with_default "CDX_DC" "US")
+CDX_API_BASE=$(prompt_with_default "CDX_API_BASE" "https://console.cloudanix.com")
 
-# Check if required resources exist
-if ! check_secret_exists "$SECRET_NAME"; then
-    echo "Error: Secret $SECRET_NAME does not exist. Please create it first."
-    exit 1
-fi
+log "Creating Secrets in Secret Manager ..."
+SECRET_ARN=$(aws secretsmanager create-secret \
+    --name $SECRET_NAME \
+    --description "Secrets for CDX" \
+    --secret-string "{\"CDX_AUTH_TOKEN\": \"$CDX_AUTH_TOKEN\", \"CDX_SIGNATURE_SECRET_KEY\": \"$CDX_SIGNATURE_SECRET_KEY\", \"CDX_SENTRY_DSN\": \"$CDX_SENTRY_DSN\", \"CDX_DC\": \"$CDX_DC\", \"CDX_API_BASE\": \"$CDX_API_BASE\", \"CDX_LOGGING_S3_BUCKET\": \"$BUCKET_NAME\"}" \
+    --query 'ARN' \
+    --output text)
 
-if ! check_role_exists "cdx-ECSTaskRole"; then
-    echo "Error: IAM role cdx-ECSTaskRole does not exist. Please create it first."
-    exit 1
-fi
+wait_for_secret $SECRET_NAME
 
-# Get the Secret ARN for referencing in task definitions
-SECRET_ARN=$(aws secretsmanager describe-secret --secret-id $SECRET_NAME --query 'ARN' --output text)
-log "Found Secret ARN: $SECRET_ARN"
+aws secretsmanager tag-resource \
+    --secret-id $SECRET_NAME \
+    --tags '[{"Key":"Purpose","Value":"database-iam-jit"},{"Key":"created_by","Value":"cloudanix"}]'
+echo "Secret created with ARN: $SECRET_ARN"
 
 echo -e "\n=== Configuration Summary ==="
 echo "AWS Region: $AWS_REGION"
@@ -182,6 +236,24 @@ aws s3api create-bucket \
 aws s3api put-bucket-tagging \
     --bucket $BUCKET_NAME \
     --tagging '{"TagSet": [{"Key": "Purpose", "Value": "database-iam-jit"}, {"Key": "created_by", "Value": "cloudanix"}, {"Key": "setup", "Value": "'$SETUP_NUMBER'"}]}'
+
+# Define new resources for this setup
+S3_RESOURCES=(
+  "arn:aws:s3:::$BUCKET_NAME"
+  "arn:aws:s3:::$BUCKET_NAME/*"
+)
+
+LOG_RESOURCES=(
+  "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_1:*"
+  "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_2:*"
+  "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_3:*"
+)
+
+# Extend both policies
+extend_policy cdx-S3AccessPolicy "${S3_RESOURCES[@]}"
+extend_policy cdx-CloudWatchLogsPolicy "${LOG_RESOURCES[@]}"
+
+log "IAM policy extension for setup #${SETUP_NUMBER} is complete."
 
 # Create ECS Cluster
 log "Creating ECS Cluster..."

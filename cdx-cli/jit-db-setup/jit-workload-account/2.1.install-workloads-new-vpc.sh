@@ -2,7 +2,6 @@
 set -e  
 set -u  
 
-
 prompt_with_default() {
     local prompt="$1"
     local default_value="$2"
@@ -118,6 +117,7 @@ wait_for_namespace() {
 
 echo "=== JIT Account Infrastructure Setup ==="
 echo "Please provide the following configuration details:"
+
 # AWS Configuration
 AWS_REGION=$(prompt_with_default "AWS Region" "us-east-1")
 ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
@@ -130,12 +130,14 @@ PRIVATE_SUBNET_1_CIDR=$(prompt_with_default "Private Subnet 1 CIDR" "10.x.1.0/24
 PRIVATE_SUBNET_2_CIDR=$(prompt_with_default "Private Subnet 2 CIDR" "10.x.2.0/24")
 PUBLIC_SUBNET_1_CIDR=$(prompt_with_default "Public Subnet 1 CIDR" "10.x.3.0/24")
 PUBLIC_SUBNET_2_CIDR=$(prompt_with_default "Public Subnet 2 CIDR" "10.x.4.0/24")
-BUCKET_NAME=$(prompt_with_default "Enter S3 bucketname according to cdx-jit-db-logs-<org_name> pattern" "cdx-jit-db-logs--jfinance")
+
+BUCKET_NAME=$(prompt_with_default "Enter S3 bucket name according to cdx-jit-db-logs-<org_name> pattern" "cdx-jit-db-logs-finance")
 # ECS Configuration
 ECS_CLUSTER_NAME="cdx-jit-db-cluster"
 LOG_GROUP_NAME_1="/ecs/${PROJECT_NAME}/proxyserver"
 LOG_GROUP_NAME_2="/ecs/${PROJECT_NAME}/proxysql"
 LOG_GROUP_NAME_3="/ecs/${PROJECT_NAME}/query-logging"
+
 # Secrets Configuration
 SECRET_NAME=$(prompt_with_default "Secrets Manager Secret Name" "CDX_SECRETS")
 CDX_AUTH_TOKEN=$(prompt_with_default "CDX Auth Token" "AUTH_TOKEN_1234567890")
@@ -143,7 +145,6 @@ CDX_SIGNATURE_SECRET_KEY=$(prompt_with_default "CDX Signature Secret Key" "SECRE
 CDX_SENTRY_DSN=$(prompt_with_default "CDX Sentry DSN" "CDX_SENTRY_DSN")
 CDX_DC=$(prompt_with_default "CDX_DC" "US")
 CDX_API_BASE=$(prompt_with_default "CDX_API_BASE" "https://console.cloudanix.com")
-
 
 echo -e "\n=== Configuration Summary ==="
 echo "AWS Region: $AWS_REGION"
@@ -275,9 +276,10 @@ aws ec2 associate-route-table \
 
 log "Creating ECS Task Role and policies..."
 
+ECS_TASK_ROLE_NAME="cdx-ECSTaskRole"
 # Create the ECS task role
 aws iam create-role \
-    --role-name cdx-ECSTaskRole \
+    --role-name $ECS_TASK_ROLE_NAME \
     --assume-role-policy-document '{
         "Version": "2012-10-17",
         "Statement": [
@@ -307,7 +309,6 @@ aws iam create-policy \
         ]
     }'
 
-#Edit
 # Create custom policy for RDS role assumption
 aws iam create-policy \
     --policy-name cdx-ECSRDSAssumeRolePolicy \
@@ -342,10 +343,57 @@ aws iam create-policy \
     ]
 }'
 
+log "Creating custom S3 policy..."
+S3_POLICY_NAME="cdx-S3AccessPolicy"
+
+aws iam create-policy \
+    --policy-name $S3_POLICY_NAME \
+    --policy-document '{
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "s3:*",
+                    "s3-object-lambda:*"
+                ],
+                "Resource": [
+                    "arn:aws:s3:::'$BUCKET_NAME'",
+                    "arn:aws:s3:::'$BUCKET_NAME'/*"
+                ]
+            }
+        ]
+    }'
+
+log "Creating custom CloudWatch Logs policy..."
+LOGS_POLICY_NAME="cdx-CloudWatchLogsPolicy"
+
+aws iam create-policy \
+    --policy-name $LOGS_POLICY_NAME \
+    --policy-document '{
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "logs:*",
+                    "cloudwatch:GenerateQuery"
+                ],
+                "Resource": [
+                    "arn:aws:logs:'$AWS_REGION':'$ACCOUNT_ID':log-group:'$LOG_GROUP_NAME_1':*",
+                    "arn:aws:logs:'$AWS_REGION':'$ACCOUNT_ID':log-group:'$LOG_GROUP_NAME_2':*",
+                    "arn:aws:logs:'$AWS_REGION':'$ACCOUNT_ID':log-group:'$LOG_GROUP_NAME_3':*"
+                ]
+            }
+        ]
+    }'
+
 # Store policy ARNs in variables
 SECRETS_POLICY_ARN=$(aws iam list-policies --query 'Policies[?PolicyName==`cdx-ECSSecretsAccessPolicy`].Arn' --output text)
 RDS_ASSUME_POLICY_ARN=$(aws iam list-policies --query 'Policies[?PolicyName==`cdx-ECSRDSAssumeRolePolicy`].Arn' --output text)
 EFS_POLICY_ARN=$(aws iam list-policies --query 'Policies[?PolicyName==`cdx-EFSAccessPolicy`].Arn' --output text)
+S3_POLICY_ARN=$(aws iam list-policies --query 'Policies[?PolicyName==`'$S3_POLICY_NAME'`].Arn' --output text)
+LOGS_POLICY_ARN=$(aws iam list-policies --query 'Policies[?PolicyName==`'$LOGS_POLICY_NAME'`].Arn' --output text)
 
 # Attach AWS managed policies
 aws iam attach-role-policy \
@@ -355,14 +403,6 @@ aws iam attach-role-policy \
 aws iam attach-role-policy \
     --role-name cdx-ECSTaskRole \
     --policy-arn "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-
-aws iam attach-role-policy \
-    --role-name cdx-ECSTaskRole \
-    --policy-arn "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
-
-aws iam attach-role-policy \
-    --role-name cdx-ECSTaskRole \
-    --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
 
 # Attach custom policies
 aws iam attach-role-policy \
@@ -377,6 +417,14 @@ aws iam attach-role-policy \
     --role-name cdx-ECSTaskRole \
     --policy-arn $EFS_POLICY_ARN
 
+aws iam attach-role-policy \
+    --role-name cdx-ECSTaskRole \
+    --policy-arn $S3_POLICY_ARN
+
+aws iam attach-role-policy \
+    --role-name cdx-ECSTaskRole \
+    --policy-arn $LOGS_POLICY_ARN
+    
 log "ECS Task Role and policies created successfully"
 
 log "Creating CloudWatch Log Group..."
