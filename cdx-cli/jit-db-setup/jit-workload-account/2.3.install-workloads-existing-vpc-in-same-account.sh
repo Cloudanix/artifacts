@@ -107,6 +107,46 @@ check_role_exists() {
     fi
 }
 
+# === Extend IAM Policies with New Resources ===
+
+extend_policy() {
+  local policy_name=$1
+  shift
+  local new_resources=("$@")
+  local policy_arn="arn:aws:iam::$ACCOUNT_ID:policy/$policy_name"
+
+  log "Extending IAM policy: $policy_name"
+
+  version_id=$(aws iam get-policy --policy-arn $policy_arn --query 'Policy.DefaultVersionId' --output text)
+
+  aws iam get-policy-version \
+    --policy-arn $policy_arn \
+    --version-id $version_id \
+    --query 'PolicyVersion.Document' \
+    --output json > tmp-policy.json
+
+  jq --argjson newResources "$(printf '%s\n' "${new_resources[@]}" | jq -R . | jq -s .)" \
+    '(.Statement[0].Resource) |= (. + $newResources | unique)' \
+    tmp-policy.json > updated-policy.json
+
+  version_count=$(aws iam list-policy-versions --policy-arn $policy_arn --query 'Versions' | jq length)
+  if [ "$version_count" -ge 5 ]; then
+    old_version=$(aws iam list-policy-versions --policy-arn $policy_arn \
+      --query 'Versions[?IsDefaultVersion==`false`].[VersionId]' \
+      --output text | head -n 1)
+    aws iam delete-policy-version --policy-arn $policy_arn --version-id $old_version
+    log "Deleted old policy version: $old_version"
+  fi
+
+  aws iam create-policy-version \
+    --policy-arn $policy_arn \
+    --policy-document file://updated-policy.json \
+    --set-as-default > /dev/null
+
+  rm -f tmp-policy.json updated-policy.json
+  log "Updated policy: $policy_name with new resources."
+}
+
 echo "=== JIT Account Infrastructure Setup - Additional VPC ==="
 echo "Please provide the following configuration details:"
 
@@ -196,6 +236,24 @@ aws s3api create-bucket \
 aws s3api put-bucket-tagging \
     --bucket $BUCKET_NAME \
     --tagging '{"TagSet": [{"Key": "Purpose", "Value": "database-iam-jit"}, {"Key": "created_by", "Value": "cloudanix"}, {"Key": "setup", "Value": "'$SETUP_NUMBER'"}]}'
+
+# Define new resources for this setup
+S3_RESOURCES=(
+  "arn:aws:s3:::$BUCKET_NAME"
+  "arn:aws:s3:::$BUCKET_NAME/*"
+)
+
+LOG_RESOURCES=(
+  "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_1:*"
+  "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_2:*"
+  "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_3:*"
+)
+
+# Extend both policies
+extend_policy cdx-S3AccessPolicy "${S3_RESOURCES[@]}"
+extend_policy cdx-CloudWatchLogsPolicy "${LOG_RESOURCES[@]}"
+
+log "IAM policy extension for setup #${SETUP_NUMBER} is complete."
 
 # Create ECS Cluster
 log "Creating ECS Cluster..."
