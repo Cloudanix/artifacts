@@ -649,10 +649,17 @@ apply_secret_tags "$SECRET_ARN" "$TAGS_FILE"
 
 # Create S3 Bucket 
 echo "Creating S3 Bucket: $BUCKET_NAME"
-aws s3api create-bucket \
-    --bucket $BUCKET_NAME \
-    --region $AWS_REGION \
-    --create-bucket-configuration LocationConstraint=$AWS_REGION
+if [ "$AWS_REGION" == "us-east-1" ]; then
+    aws s3api create-bucket \
+        --bucket "$BUCKET_NAME" \
+        --region "$AWS_REGION"
+else
+    aws s3api create-bucket \
+        --bucket "$BUCKET_NAME" \
+        --region "$AWS_REGION" \
+        --create-bucket-configuration LocationConstraint="$AWS_REGION"
+fi
+
 
 apply_tags_alt "$BUCKET_NAME" "$TAGS_FILE" "s3api"
 

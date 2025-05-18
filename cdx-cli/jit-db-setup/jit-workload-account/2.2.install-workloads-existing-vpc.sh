@@ -158,6 +158,31 @@ apply_tags_alt() {
         aws $service put-bucket-tagging --bucket "$resource_name" --tagging "$default_tags"
     fi
 }
+generate_tag_specs() {
+    local resource_type=$1
+    local tags_file=$2
+    local resource_name="${PROJECT_NAME}-${resource_type}"
+
+    local tags_json
+
+    if [ -f "$tags_file" ]; then
+        tags_json=$(jq --arg name "$resource_name" \
+            'map(select(.Key != "Name")) + [{"Key": "Name", "Value": $name}]' "$tags_file")
+    else
+        tags_json=$(cat <<EOF
+[
+  {"Key": "Name", "Value": "$resource_name"},
+  {"Key": "Purpose", "Value": "database-iam-jit"},
+  {"Key": "created_by", "Value": "cloudanix"}
+]
+EOF
+)
+    fi
+
+    # Output the final valid JSON for --tag-specifications
+    jq -n --arg rt "$resource_type" --argjson tags "$tags_json" \
+        '[{ResourceType: $rt, Tags: $tags}]'
+}
 
 # Function to apply tags to logs
 apply_logs_tags() {
@@ -489,11 +514,17 @@ wait_for_secret $SECRET_NAME
 apply_secret_tags "$SECRET_ARN" "$TAGS_FILE"
 
 # Create S3 Bucket 
-echo "Creating S3 Bucket: $BUCKET_NAME"
-aws s3api create-bucket \
-    --bucket $BUCKET_NAME \
-    --region $AWS_REGION \
-    --create-bucket-configuration LocationConstraint=$AWS_REGION
+if [ "$AWS_REGION" == "us-east-1" ]; then
+    aws s3api create-bucket \
+        --bucket "$BUCKET_NAME" \
+        --region "$AWS_REGION"
+else
+    aws s3api create-bucket \
+        --bucket "$BUCKET_NAME" \
+        --region "$AWS_REGION" \
+        --create-bucket-configuration LocationConstraint="$AWS_REGION"
+fi
+
 apply_tags_alt "$BUCKET_NAME" "$TAGS_FILE" "s3api"
 
 # Create ECS Cluster
@@ -892,7 +923,7 @@ cat <<EOF > "query-logging-task-definition.json"
     "requiresCompatibilities": [
         "FARGATE"
     ],
-   "cpu": "1024",
+    "cpu": "1024",
     "memory": "2048",
     "tags": $TASK_TAGS
 }
