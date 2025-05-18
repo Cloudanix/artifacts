@@ -1,0 +1,15 @@
+[
+    {
+      "Key": "Environment",
+      "Value": "Prod"
+    },
+    {
+      "Key": "Created_by",
+      "Value": "Cloudanix"
+    },
+    {
+      "Key": "purpose",
+      "Value": "jit_db"
+    }
+  ]
+  
