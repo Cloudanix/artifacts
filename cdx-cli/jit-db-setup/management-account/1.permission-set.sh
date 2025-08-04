@@ -43,7 +43,10 @@ cat << EOF > permission-set-policy.json
             ],
             "Resource": [
                 "arn:aws:ecs:$JIT_REGION:$JIT_ACCOUNT_ID:cluster/$JIT_CLUSTER_NAME",
-                "arn:aws:ecs:$JIT_REGION:$JIT_ACCOUNT_ID:task/$JIT_CLUSTER_NAME/*"
+                "arn:aws:ecs:$JIT_REGION:$JIT_ACCOUNT_ID:task/$JIT_CLUSTER_NAME/*",
+                "arn:aws:ec2:$JIT_REGION:$JIT_ACCOUNT_ID:instance/*",
+				"arn:aws:ssm:*:*:document/*",
+				"arn:aws:ssm:*:*:session/*"
             ]
         },
         {
@@ -55,7 +58,12 @@ cat << EOF > permission-set-policy.json
                 "ecs:DescribeServices",
                 "ecs:ListServices"
             ],
-            "Resource": "arn:aws:ecs:$JIT_REGION:$JIT_ACCOUNT_ID:cluster/$JIT_CLUSTER_NAME"
+            "Resource": [
+                "arn:aws:ecs:${JIT_REGION}:${JIT_ACCOUNT_ID}:cluster/${JIT_CLUSTER_NAME}",
+                "arn:aws:ecs:${JIT_REGION}:${JIT_ACCOUNT_ID}:task/${JIT_CLUSTER_NAME}/*",
+                "arn:aws:ecs:${JIT_REGION}:${JIT_ACCOUNT_ID}:service/${JIT_CLUSTER_NAME}/*",
+                "arn:aws:ecs:${JIT_REGION}:${JIT_ACCOUNT_ID}:container-instance/${JIT_CLUSTER_NAME}/*"
+            ]
         }
     ]
 }
