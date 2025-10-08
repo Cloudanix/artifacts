@@ -633,8 +633,8 @@ cat <<EOF >  "proxyserver-task-definition-${SETUP_NUMBER}.json"
     "requiresCompatibilities": [
         "FARGATE"
     ],
-    "cpu": "2048",
-    "memory": "4096",
+    "cpu": "512",
+    "memory": "2048",
     "tags": $TASK_TAGS
 }
 EOF
@@ -704,8 +704,8 @@ cat <<EOF >  "proxysql-task-definition-${SETUP_NUMBER}.json"
     "requiresCompatibilities": [
         "FARGATE"
     ],
-    "cpu": "2048",
-    "memory": "4096",
+    "cpu": "512",
+    "memory": "2048",
     "tags": $TASK_TAGS
 }
 EOF
@@ -805,7 +805,7 @@ cat <<EOF > "query-logging-task-definition-${SETUP_NUMBER}.json"
     "requiresCompatibilities": [
         "FARGATE"
     ],
-    "cpu": "1024",
+    "cpu": "512",
     "memory": "2048",
     "tags": $TASK_TAGS
 }
