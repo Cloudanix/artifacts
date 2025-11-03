@@ -119,7 +119,7 @@ aws iam detach-role-policy --role-name cdx-ECSTaskRole --policy-arn arn:aws:iam:
 aws iam detach-role-policy --role-name cdx-ECSTaskRole --policy-arn arn:aws:iam::aws:policy/CloudWatchLogsFullAccess || true
 
 # Delete custom policies
-for POLICY_NAME in "ECSSecretsAccessPolicy" "ECSRDSAssumeRolePolicy" "EFSAccessPolicy"; do
+for POLICY_NAME in "cdx-ECSSecretsAccessPolicy" "cdx-ECSRDSAssumeRolePolicy" "cdx-EFSAccessPolicy" "cdx-CloudWatchLogsPolicy" "cdx-S3AccessPolicy"; do
     POLICY_ARN=$(aws iam list-policies --scope Local --query "Policies[?PolicyName=='$POLICY_NAME'].Arn" --output text)
     if [ -n "$POLICY_ARN" ] && [ "$POLICY_ARN" != "None" ]; then
         aws iam detach-role-policy --role-name ECSTaskRole --policy-arn $POLICY_ARN || true
