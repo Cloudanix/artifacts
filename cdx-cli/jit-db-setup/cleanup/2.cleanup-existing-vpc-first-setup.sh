@@ -23,12 +23,37 @@ resource_delete() {
     fi
 }
 
+# Function to prompt yes/no
+prompt_yes_no() {
+    local prompt="$1"
+    local default_value="${2:-n}"
+    while true; do
+        read -p "$prompt (y/n) [$default_value]: " yn
+        yn=${yn:-$default_value}
+        case $yn in
+            [Yy]* ) return 0;;
+            [Nn]* ) return 1;;
+            * ) echo "Please answer yes (y) or no (n).";;
+        esac
+    done
+}
+
 # Get configuration
 log "=== JIT Account Infrastructure Cleanup ==="
 AWS_REGION=$(aws configure get region 2>/dev/null || echo "us-east-1")
 AWS_REGION=$(read -p "AWS Region [$AWS_REGION]: " input; echo "${input:-$AWS_REGION}")
 ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 log "Your AWS Account ID is: $ACCOUNT_ID"
+
+# Ask about DAM cleanup
+echo ""
+CLEANUP_DAM=false
+if prompt_yes_no "Was DAM (Database Activity Monitoring) enabled in this setup?" "n"; then
+    CLEANUP_DAM=true
+    echo "DAM resources will be included in cleanup"
+else
+    echo "Only ProxySQL resources will be cleaned up"
+fi
 
 # Project Configuration
 PROJECT_NAME="cdx-jit-db"
@@ -41,16 +66,28 @@ LOG_GROUP_NAME_1="/ecs/${PROJECT_NAME}/proxyserver"
 LOG_GROUP_NAME_2="/ecs/${PROJECT_NAME}/proxysql"
 LOG_GROUP_NAME_3="/ecs/${PROJECT_NAME}/query-logging"
 
+# DAM-specific log groups
+if [ "$CLEANUP_DAM" = true ]; then
+    LOG_GROUP_NAME_4="/ecs/${PROJECT_NAME}/dam-server"
+    LOG_GROUP_NAME_5="/ecs/${PROJECT_NAME}/postgresql"
+fi
+
 log "=== Configuration Summary ==="
 log "AWS Region: $AWS_REGION"
 log "Project Name: $PROJECT_NAME"
 log "ECS Cluster Name: $ECS_CLUSTER_NAME"
 log "Secrets Name: $SECRET_NAME"
 log "S3 Bucket Name: $BUCKET_NAME"
+log "Cleanup DAM: $CLEANUP_DAM"
 
 # Step 1: Delete ECS Services
 log "Checking for ECS services..."
 SERVICE_NAMES=("proxysql" "proxyserver" "query-logging")
+
+# Add DAM services if cleanup is enabled
+if [ "$CLEANUP_DAM" = true ]; then
+    SERVICE_NAMES+=("dam-server" "postgresql")
+fi
 
 for service_name in "${SERVICE_NAMES[@]}"; do
     # Check if service exists
@@ -71,6 +108,11 @@ done
 # Step 2: Delete Task Definitions
 log "Checking for task definitions..."
 TASK_FAMILIES=("proxyserver-task" "proxysql" "query-logging-task")
+
+# Add DAM task families if cleanup is enabled
+if [ "$CLEANUP_DAM" = true ]; then
+    TASK_FAMILIES+=("dam-server-task" "postgresql-task")
+fi
 
 for family in "${TASK_FAMILIES[@]}"; do
     # List all active revisions
@@ -157,7 +199,14 @@ else
 fi
 
 # Step 7: Delete CloudWatch Log Groups
-for lg in "$LOG_GROUP_NAME_1" "$LOG_GROUP_NAME_2" "$LOG_GROUP_NAME_3"; do
+LOG_GROUPS=("$LOG_GROUP_NAME_1" "$LOG_GROUP_NAME_2" "$LOG_GROUP_NAME_3")
+
+# Add DAM log groups if cleanup is enabled
+if [ "$CLEANUP_DAM" = true ]; then
+    LOG_GROUPS+=("$LOG_GROUP_NAME_4" "$LOG_GROUP_NAME_5")
+fi
+
+for lg in "${LOG_GROUPS[@]}"; do
     resource_delete "CloudWatch log group" "$lg" \
         "aws logs describe-log-groups --log-group-name-prefix $lg --region $AWS_REGION --query 'logGroups[0].logGroupName' --output text | grep -q $lg" \
         "aws logs delete-log-group --log-group-name $lg --region $AWS_REGION --no-cli-pager"
@@ -223,6 +272,11 @@ fi
 
 # Step 11: Delete ECR Repositories
 REPOSITORIES=("cloudanix/ecr-aws-jit-proxy-sql" "cloudanix/ecr-aws-jit-proxy-server" "cloudanix/ecr-aws-jit-query-logging")
+
+# Add DAM repositories if cleanup is enabled
+if [ "$CLEANUP_DAM" = true ]; then
+    REPOSITORIES+=("cloudanix/ecr-aws-jit-dam-server" "cloudanix/ecr-aws-jit-postgresql")
+fi
 
 for repo in "${REPOSITORIES[@]}"; do
     if aws ecr describe-repositories --repository-names "$repo" --region $AWS_REGION >/dev/null 2>&1; then
