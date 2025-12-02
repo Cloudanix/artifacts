@@ -184,7 +184,7 @@ fi
 log "Cleaning up IAM resources..."
 
 # Detach and delete policies
-POLICIES=("cdx-ECSSecretsAccessPolicy" "cdx-ECSRDSAssumeRolePolicy" "cdx-EFSAccessPolicy")
+POLICIES=("cdx-ECSSecretsAccessPolicy" "cdx-ECSRDSAssumeRolePolicy" "cdx-EFSAccessPolicy" "cdx-CloudWatchLogsPolicy" "cdx-S3AccessPolicy")
 for policy_name in "${POLICIES[@]}"; do
     policy_arn=$(aws iam list-policies --scope Local --query "Policies[?PolicyName=='$policy_name'].Arn" --output text)
     
