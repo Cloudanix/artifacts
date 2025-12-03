@@ -9,6 +9,20 @@ prompt_with_default() {
     echo "${user_input:-$default_value}"
 }
 
+prompt_yes_no() {
+    local prompt="$1"
+    local default_value="${2:-n}"
+    while true; do
+        read -p "$prompt (y/n) [$default_value]: " yn
+        yn=${yn:-$default_value}
+        case $yn in
+            [Yy]* ) return 0;;
+            [Nn]* ) return 1;;
+            * ) echo "Please answer yes (y) or no (n).";;
+        esac
+    done
+}
+
 # Function to handle errors
 handle_error() {
     local exit_code=$?
@@ -307,6 +321,17 @@ AWS_REGION=$(prompt_with_default "AWS Region" "us-east-1")
 ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 SETUP_NUMBER=$(prompt_with_default "Enter the setup number for this deployment in this account " "2")
 echo "Your AWS Account ID is: $ACCOUNT_ID"
+
+# Ask about DAM setup
+echo ""
+ENABLE_DAM=false
+if prompt_yes_no "Enable Database Activity Monitoring (DAM)?" "n"; then
+    ENABLE_DAM=true
+    echo "DAM will be enabled for setup #${SETUP_NUMBER}"
+else
+    echo "DAM will be disabled (only ProxySQL services)"
+fi
+
 PROJECT_NAME="cdx-jit-db"
 NAMESPACE_NAME="proxysql-proxyserver-${SETUP_NUMBER}"
 VPC_ID=$(prompt_with_default "VPC ID for this setup" "vpc-xxxxxxxx")
@@ -324,6 +349,12 @@ LOG_GROUP_NAME_1="/ecs/${PROJECT_NAME}/proxyserver-${SETUP_NUMBER}"
 LOG_GROUP_NAME_2="/ecs/${PROJECT_NAME}/proxysql-${SETUP_NUMBER}"
 LOG_GROUP_NAME_3="/ecs/${PROJECT_NAME}/query-logging-${SETUP_NUMBER}"
 
+# DAM-specific log groups
+if [ "$ENABLE_DAM" = true ]; then
+    LOG_GROUP_NAME_4="/ecs/${PROJECT_NAME}/dam-server-${SETUP_NUMBER}"
+    LOG_GROUP_NAME_5="/ecs/${PROJECT_NAME}/postgresql-${SETUP_NUMBER}"
+fi
+
 # Secrets Configuration
 SECRET_NAME=$(prompt_with_default "Secrets Manager Secret Name" "CDX_SECRETS")
 CDX_AUTH_TOKEN=$(prompt_with_default "CDX Auth Token" "AUTH_TOKEN_1234567890")
@@ -331,6 +362,17 @@ CDX_SIGNATURE_SECRET_KEY=$(prompt_with_default "CDX Signature Secret Key" "SECRE
 CDX_SENTRY_DSN=$(prompt_with_default "CDX Sentry DSN" "CDX_SENTRY_DSN")
 CDX_DC=$(prompt_with_default "CDX_DC" "US")
 CDX_API_BASE=$(prompt_with_default "CDX_API_BASE" "https://console.cloudanix.com")
+
+# DAM-specific secrets
+if [ "$ENABLE_DAM" = true ]; then
+    ENCRYPTION_KEY=$(prompt_with_default "ENCRYPTION_KEY" "123890234")
+    POSTGRES_PASSWORD=$(prompt_with_default "PostgreSQL Password (leave empty to auto-generate)" "")
+    if [ -z "$POSTGRES_PASSWORD" ]; then
+        POSTGRES_PASSWORD=$(openssl rand -base64 32)
+        echo "Generated PostgreSQL password: $POSTGRES_PASSWORD"
+    fi
+fi
+
 # Tags configuration
 TAGS_FILE=$(prompt_with_default "Path to JSON tags file" "2.4.tag.json")
 if [ -n "$TAGS_FILE" ] && [ ! -f "$TAGS_FILE" ]; then
@@ -338,11 +380,19 @@ if [ -n "$TAGS_FILE" ] && [ ! -f "$TAGS_FILE" ]; then
     TAGS_FILE=""
 fi
 
-log "Creating Secrets in Secret Manager ..."
+log "Creating Secrets in Secret Manager..."
+
+# Build secrets JSON based on DAM enabled/disabled
+if [ "$ENABLE_DAM" = true ]; then
+    SECRET_STRING="{\"CDX_AUTH_TOKEN\": \"$CDX_AUTH_TOKEN\", \"CDX_SIGNATURE_SECRET_KEY\": \"$CDX_SIGNATURE_SECRET_KEY\", \"CDX_SENTRY_DSN\": \"$CDX_SENTRY_DSN\", \"CDX_DC\": \"$CDX_DC\", \"CDX_API_BASE\": \"$CDX_API_BASE\", \"CDX_LOGGING_S3_BUCKET\": \"$BUCKET_NAME\", \"POSTGRES_PASSWORD\": \"$POSTGRES_PASSWORD\", \"ENCRYPTION_KEY\": \"$ENCRYPTION_KEY\" }"
+else
+    SECRET_STRING="{\"CDX_AUTH_TOKEN\": \"$CDX_AUTH_TOKEN\", \"CDX_SIGNATURE_SECRET_KEY\": \"$CDX_SIGNATURE_SECRET_KEY\", \"CDX_SENTRY_DSN\": \"$CDX_SENTRY_DSN\", \"CDX_DC\": \"$CDX_DC\", \"CDX_API_BASE\": \"$CDX_API_BASE\", \"CDX_LOGGING_S3_BUCKET\": \"$BUCKET_NAME\"}"
+fi
+
 SECRET_ARN=$(aws secretsmanager create-secret \
     --name $SECRET_NAME \
     --description "Secrets for CDX" \
-    --secret-string "{\"CDX_AUTH_TOKEN\": \"$CDX_AUTH_TOKEN\", \"CDX_SIGNATURE_SECRET_KEY\": \"$CDX_SIGNATURE_SECRET_KEY\", \"CDX_SENTRY_DSN\": \"$CDX_SENTRY_DSN\", \"CDX_DC\": \"$CDX_DC\", \"CDX_API_BASE\": \"$CDX_API_BASE\", \"CDX_LOGGING_S3_BUCKET\": \"$BUCKET_NAME\"}" \
+    --secret-string "$SECRET_STRING" \
     --query 'ARN' \
     --output text)
 
@@ -359,6 +409,8 @@ echo "Project Name: $PROJECT_NAME"
 echo "ECS Cluster Name: $ECS_CLUSTER_NAME"
 echo "Secrets Name: $SECRET_NAME"
 echo "VPC ID: $VPC_ID"
+echo "DAM Enabled: $ENABLE_DAM"
+
 if [ -n "$TAGS_FILE" ]; then
     echo "Using custom tags from: $TAGS_FILE"
 else
@@ -378,6 +430,15 @@ aws logs create-log-group --log-group-name $LOG_GROUP_NAME_3 || true
 apply_logs_tags "$LOG_GROUP_NAME_1" "$TAGS_FILE"
 apply_logs_tags "$LOG_GROUP_NAME_2" "$TAGS_FILE"
 apply_logs_tags "$LOG_GROUP_NAME_3" "$TAGS_FILE"
+
+# Create DAM-specific log groups
+if [ "$ENABLE_DAM" = true ]; then
+    log "Creating DAM log groups..."
+    aws logs create-log-group --log-group-name $LOG_GROUP_NAME_4 || true
+    aws logs create-log-group --log-group-name $LOG_GROUP_NAME_5 || true
+    apply_logs_tags "$LOG_GROUP_NAME_4" "$TAGS_FILE"
+    apply_logs_tags "$LOG_GROUP_NAME_5" "$TAGS_FILE"
+fi
 
 # Create S3 Bucket for this setup
 if [ "$AWS_REGION" == "us-east-1" ]; then
@@ -404,6 +465,14 @@ LOG_RESOURCES=(
   "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_2:*"
   "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_3:*"
 )
+
+# Add DAM log groups to resources
+if [ "$ENABLE_DAM" = true ]; then
+    LOG_RESOURCES+=(
+        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_4:*"
+        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_5:*"
+    )
+fi
 
 # Extend both policies
 extend_policy cdx-S3AccessPolicy "${S3_RESOURCES[@]}"
@@ -465,6 +534,32 @@ aws ec2 authorize-security-group-egress \
     --port 2049 \
     --source-group $ECS_SG_ID
 
+# Add DAM-specific security group rules
+if [ "$ENABLE_DAM" = true ]; then
+    log "Adding DAM security group rules..."
+    
+    # PostgreSQL port
+    aws ec2 authorize-security-group-ingress \
+        --group-id $ECS_SG_ID \
+        --protocol tcp \
+        --port 5432 \
+        --source-group $ECS_SG_ID
+    
+    # DAM server port
+    aws ec2 authorize-security-group-ingress \
+        --group-id $ECS_SG_ID \
+        --protocol tcp \
+        --port 8080 \
+        --source-group $ECS_SG_ID
+    
+    # PostgreSQL egress
+    aws ec2 authorize-security-group-egress \
+        --group-id $ECS_SG_ID \
+        --protocol tcp \
+        --port 5432 \
+        --source-group $ECS_SG_ID
+fi
+
 # Create EFS file system
 log "Creating EFS file system..."
 EFS_ID=$(aws efs create-file-system \
@@ -516,6 +611,10 @@ ACCESS_POINT_ID=$(aws efs create-access-point \
 # Tag repositories if they exist (they should from the first setup)
 REPOSITORIES=("cloudanix/ecr-aws-jit-proxy-sql" "cloudanix/ecr-aws-jit-proxy-server" "cloudanix/ecr-aws-jit-query-logging")
 
+if [ "$ENABLE_DAM" = true ]; then
+    REPOSITORIES+=("cloudanix/ecr-aws-jit-dam-server" "cloudanix/ecr-aws-jit-postgresql")
+fi
+
 log "Verifying ECR repositories..."
 for repo in "${REPOSITORIES[@]}"; do
     REPO_ARN=$(aws ecr describe-repositories --repository-names "$repo" \
@@ -538,7 +637,8 @@ fi
 # Create task definition files
 log "Creating task definition files..."
 
-cat <<EOF >  "proxyserver-task-definition-${SETUP_NUMBER}.json"
+# ProxyServer task definition
+cat <<EOF > "proxyserver-task-definition-${SETUP_NUMBER}.json"
 {
     "family": "proxyserver-task-${SETUP_NUMBER}",
     "containerDefinitions": [
@@ -591,6 +691,25 @@ cat <<EOF >  "proxyserver-task-definition-${SETUP_NUMBER}.json"
                     "name": "CDX_LOGGING_S3_BUCKET",
                     "valueFrom": "$SECRET_ARN:CDX_LOGGING_S3_BUCKET::"
                 }
+EOF
+
+# Add POSTGRES_PASSWORD if DAM is enabled
+if [ "$ENABLE_DAM" = true ]; then
+    cat <<EOF >> "proxyserver-task-definition-${SETUP_NUMBER}.json"
+                ,
+                {
+                    "name": "POSTGRES_PASSWORD",
+                    "valueFrom": "$SECRET_ARN:POSTGRES_PASSWORD::"
+                }
+                ,
+                {
+                    "name": "ENCRYPTION_KEY",
+                    "valueFrom": "$SECRET_ARN:ENCRYPTION_KEY::"
+                }
+EOF
+fi
+
+cat <<EOF >> "proxyserver-task-definition-${SETUP_NUMBER}.json"
             ],
             "mountPoints": [
                 {
@@ -639,7 +758,8 @@ cat <<EOF >  "proxyserver-task-definition-${SETUP_NUMBER}.json"
 }
 EOF
 
-cat <<EOF >  "proxysql-task-definition-${SETUP_NUMBER}.json"
+# ProxySQL task definition
+cat <<EOF > "proxysql-task-definition-${SETUP_NUMBER}.json"
 {
     "family": "proxysql-${SETUP_NUMBER}",
     "containerDefinitions": [
@@ -710,6 +830,7 @@ cat <<EOF >  "proxysql-task-definition-${SETUP_NUMBER}.json"
 }
 EOF
 
+# Query Logging task definition
 cat <<EOF > "query-logging-task-definition-${SETUP_NUMBER}.json"
 {
     "family": "query-logging-task-${SETUP_NUMBER}",
@@ -771,6 +892,20 @@ cat <<EOF > "query-logging-task-definition-${SETUP_NUMBER}.json"
                     "name": "CDX_SENTRY_DSN",
                     "valueFrom": "$SECRET_ARN:CDX_SENTRY_DSN::"
                 }
+EOF
+
+# Add POSTGRES_PASSWORD if DAM is enabled
+if [ "$ENABLE_DAM" = true ]; then
+    cat <<EOF >> "query-logging-task-definition-${SETUP_NUMBER}.json"
+                ,
+                {
+                    "name": "POSTGRES_PASSWORD",
+                    "valueFrom": "$SECRET_ARN:POSTGRES_PASSWORD::"
+                }
+EOF
+fi
+
+cat <<EOF >> "query-logging-task-definition-${SETUP_NUMBER}.json"
             ],
             "logConfiguration": {
                 "logDriver": "awslogs",
@@ -811,11 +946,238 @@ cat <<EOF > "query-logging-task-definition-${SETUP_NUMBER}.json"
 }
 EOF
 
+# Create DAM-specific task definitions
+if [ "$ENABLE_DAM" = true ]; then
+    log "Creating DAM task definitions..."
+    
+    # DAM Server task definition
+    cat <<EOF > "dam-server-task-definition-${SETUP_NUMBER}.json"
+{
+    "family": "dam-server-task-${SETUP_NUMBER}",
+    "containerDefinitions": [
+        {
+            "name": "dam-server",
+            "image": "$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/cloudanix/ecr-aws-jit-dam-server:latest",
+            "cpu": 0,
+            "portMappings": [
+                {
+                    "name": "dam-server-http",
+                    "containerPort": 8080,
+                    "hostPort": 8080,
+                    "protocol": "tcp"
+                }
+            ],
+            "essential": true,
+            "environment": [
+                {
+                    "name": "AWS_DEFAULT_REGION",
+                    "value": "$AWS_REGION"
+                },
+                {
+                    "name": "NODE_ENV",
+                    "value": "production"
+                },
+                {
+                    "name": "PROXYSERVER_HOST",
+                    "value": "proxyserver"
+                },
+                {
+                    "name": "PROXYSERVER_PORT",
+                    "value": "8079"
+                },
+                {
+                    "name": "DAM_LOG_LEVEL",
+                    "value": "INFO"
+                },
+                {
+                    "name": "DAM_APP_ENV",
+                    "value": "production"
+                }
+            ],
+            "secrets": [
+                {
+                    "name": "CDX_AUTH_TOKEN",
+                    "valueFrom": "$SECRET_ARN:CDX_AUTH_TOKEN::"
+                },
+                {
+                    "name": "CDX_SIGNATURE_SECRET_KEY",
+                    "valueFrom": "$SECRET_ARN:CDX_SIGNATURE_SECRET_KEY::"
+                },
+                {
+                    "name": "CDX_SENTRY_DSN",
+                    "valueFrom": "$SECRET_ARN:CDX_SENTRY_DSN::"
+                },
+                {
+                    "name": "CDX_DC",
+                    "valueFrom": "$SECRET_ARN:CDX_DC::"
+                },
+                {
+                    "name": "CDX_API_BASE",
+                    "valueFrom": "$SECRET_ARN:CDX_API_BASE::"
+                },
+                {
+                    "name": "POSTGRES_PASSWORD",
+                    "valueFrom": "$SECRET_ARN:POSTGRES_PASSWORD::"
+                }
+            ],
+            "mountPoints": [
+                {
+                    "sourceVolume": "proxysql-data",
+                    "containerPath": "/var/lib/proxysql",
+                    "readOnly": false
+                }
+            ],
+            "volumesFrom": [],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "$LOG_GROUP_NAME_4",
+                    "awslogs-region": "$AWS_REGION",
+                    "awslogs-stream-prefix": "ecs"
+                }
+            },
+            "systemControls": []
+        }
+    ],
+    "taskRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/cdx-ECSTaskRole",
+    "executionRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/cdx-ECSTaskRole",
+    "networkMode": "awsvpc",
+    "volumes": [
+        {
+            "name": "proxysql-data",
+            "efsVolumeConfiguration": {
+                "fileSystemId": "$EFS_ID",
+                "rootDirectory": "/",
+                "transitEncryption": "ENABLED",
+                "transitEncryptionPort": 2049,
+                "authorizationConfig": {
+                    "accessPointId": "$ACCESS_POINT_ID",
+                    "iam": "ENABLED"
+                }
+            }
+        }
+    ],
+    "placementConstraints": [],
+    "requiresCompatibilities": [
+        "FARGATE"
+    ],
+    "cpu": "256",
+    "memory": "1024",
+    "tags": $TASK_TAGS
+}
+EOF
+
+    # PostgreSQL task definition
+    cat <<EOF > "postgresql-task-definition-${SETUP_NUMBER}.json"
+{
+    "family": "postgresql-task-${SETUP_NUMBER}",
+    "containerDefinitions": [
+        {
+            "name": "postgresql",
+            "image": "$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/cloudanix/ecr-aws-jit-postgresql:latest",
+            "cpu": 0,
+            "portMappings": [
+                {
+                    "name": "postgresql-db",
+                    "containerPort": 5432,
+                    "hostPort": 5432,
+                    "protocol": "tcp"
+                }
+            ],
+            "essential": true,
+            "environment": [
+                {
+                    "name": "POSTGRES_USER",
+                    "value": "pgjitdbuser"
+                },
+                {
+                    "name": "POSTGRES_DB",
+                    "value": "jitdb"
+                },
+                {
+                    "name": "PGDATA",
+                    "value": "/var/lib/proxysql/postgresql/data/pgdata"
+                },
+                {
+                    "name": "POSTGRES_INITDB_ARGS",
+                    "value": "-E UTF8 --locale=en_US.utf8"
+                }
+            ],
+            "secrets": [
+                {
+                    "name": "POSTGRES_PASSWORD",
+                    "valueFrom": "$SECRET_ARN:POSTGRES_PASSWORD::"
+                }
+            ],
+            "mountPoints": [
+                {
+                    "sourceVolume": "proxysql-data",
+                    "containerPath": "/var/lib/proxysql",
+                    "readOnly": false
+                }
+            ],
+            "volumesFrom": [],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "$LOG_GROUP_NAME_5",
+                    "awslogs-region": "$AWS_REGION",
+                    "awslogs-stream-prefix": "ecs"
+                }
+            },
+            "healthCheck": {
+                "command": [
+                    "CMD-SHELL",
+                    "pg_isready -U pgjitdbuser -d jitdb || exit 1"
+                ],
+                "interval": 30,
+                "timeout": 5,
+                "retries": 3,
+                "startPeriod": 60
+            },
+            "systemControls": []
+        }
+    ],
+    "taskRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/cdx-ECSTaskRole",
+    "executionRoleArn": "arn:aws:iam::$ACCOUNT_ID:role/cdx-ECSTaskRole",
+    "networkMode": "awsvpc",
+    "volumes": [
+        {
+            "name": "proxysql-data",
+            "efsVolumeConfiguration": {
+                "fileSystemId": "$EFS_ID",
+                "rootDirectory": "/",
+                "transitEncryption": "ENABLED",
+                "transitEncryptionPort": 2049,
+                "authorizationConfig": {
+                    "accessPointId": "$ACCESS_POINT_ID",
+                    "iam": "ENABLED"
+                }
+            }
+        }
+    ],
+    "placementConstraints": [],
+    "requiresCompatibilities": [
+        "FARGATE"
+    ],
+    "cpu": "256",
+    "memory": "1024",
+    "tags": $TASK_TAGS
+}
+EOF
+fi
+
 # Register Task Definitions
 log "Registering Task Definitions..."
 PROXYSERVER_TASK_ARN=$(aws ecs register-task-definition --cli-input-json file://proxyserver-task-definition-${SETUP_NUMBER}.json --query 'taskDefinition.taskDefinitionArn' --output text)
 PROXYSQL_TASK_ARN=$(aws ecs register-task-definition --cli-input-json file://proxysql-task-definition-${SETUP_NUMBER}.json --query 'taskDefinition.taskDefinitionArn' --output text)
 QUERYLOGGING_TASK_ARN=$(aws ecs register-task-definition --cli-input-json file://query-logging-task-definition-${SETUP_NUMBER}.json --query 'taskDefinition.taskDefinitionArn' --output text)
+
+if [ "$ENABLE_DAM" = true ]; then
+    log "Registering DAM task definitions..."
+    DAMSERVER_TASK_ARN=$(aws ecs register-task-definition --cli-input-json file://dam-server-task-definition-${SETUP_NUMBER}.json --query 'taskDefinition.taskDefinitionArn' --output text)
+    POSTGRESQL_TASK_ARN=$(aws ecs register-task-definition --cli-input-json file://postgresql-task-definition-${SETUP_NUMBER}.json --query 'taskDefinition.taskDefinitionArn' --output text)
+fi
 
 # Create Service Connect namespace for this setup
 log "Creating Service Connect namespace..."
@@ -841,6 +1203,7 @@ fi
 
 # Create ECS Services
 log "Creating ECS Services..."
+
 # Create ProxySQL service
 aws ecs create-service \
     --cluster $ECS_CLUSTER_NAME \
@@ -871,7 +1234,7 @@ aws ecs create-service \
     --service-name proxyserver \
     --task-definition proxyserver-task-$SETUP_NUMBER \
     --tags $SERVICE_TAGS \
-    --desired-count 2 \
+    --desired-count 1 \
     --launch-type FARGATE \
     --platform-version LATEST \
     --network-configuration "awsvpcConfiguration={subnets=[$PRIVATE_SUBNET_1_ID,$PRIVATE_SUBNET_2_ID],securityGroups=[$ECS_SG_ID],assignPublicIp=DISABLED}" \
@@ -879,9 +1242,17 @@ aws ecs create-service \
     --service-connect-configuration '{
         "enabled": true,
         "namespace": "'$NAMESPACE_NAME'",
-        "services": []
+        "services": [{
+            "portName": "proxyserver-http",
+            "discoveryName": "proxyserver",
+            "clientAliases": [{
+                "port": 8079,
+                "dnsName": "proxyserver"
+            }]
+        }]
     }'
 
+# Create Query Logging service
 log "Creating query-logging service..."
 aws ecs create-service \
     --cluster $ECS_CLUSTER_NAME \
@@ -899,14 +1270,83 @@ aws ecs create-service \
         "services": []
     }'
 
+# Create DAM services if enabled
+if [ "$ENABLE_DAM" = true ]; then
+    log "Creating DAM services..."
+    
+    # Create PostgreSQL service first
+    log "Creating PostgreSQL service..."
+    aws ecs create-service \
+        --cluster $ECS_CLUSTER_NAME \
+        --service-name postgresql \
+        --task-definition postgresql-task-$SETUP_NUMBER \
+        --tags $SERVICE_TAGS \
+        --desired-count 1 \
+        --launch-type FARGATE \
+        --platform-version LATEST \
+        --network-configuration "awsvpcConfiguration={subnets=[$PRIVATE_SUBNET_1_ID,$PRIVATE_SUBNET_2_ID],securityGroups=[$ECS_SG_ID],assignPublicIp=DISABLED}" \
+        --enable-execute-command \
+        --service-connect-configuration '{
+            "enabled": true,
+            "namespace": "'$NAMESPACE_NAME'",
+            "services": [{
+                "portName": "postgresql-db",
+                "discoveryName": "postgresql",
+                "clientAliases": [{
+                    "port": 5432,
+                    "dnsName": "postgresql"
+                }]
+            }]
+        }'
+    
+    # Wait for PostgreSQL to be stable
+    log "Waiting for PostgreSQL service to be stable..."
+    aws ecs wait services-stable \
+        --cluster $ECS_CLUSTER_NAME \
+        --services postgresql
+    
+    # Create DAM Server service
+    log "Creating DAM Server service..."
+    aws ecs create-service \
+        --cluster $ECS_CLUSTER_NAME \
+        --service-name dam-server \
+        --task-definition dam-server-task-$SETUP_NUMBER \
+        --tags $SERVICE_TAGS \
+        --desired-count 1 \
+        --launch-type FARGATE \
+        --platform-version LATEST \
+        --network-configuration "awsvpcConfiguration={subnets=[$PRIVATE_SUBNET_1_ID,$PRIVATE_SUBNET_2_ID],securityGroups=[$ECS_SG_ID],assignPublicIp=DISABLED}" \
+        --enable-execute-command \
+        --service-connect-configuration '{
+            "enabled": true,
+            "namespace": "'$NAMESPACE_NAME'",
+            "services": [{
+                "portName": "dam-server-http",
+                "discoveryName": "dam-server",
+                "clientAliases": [{
+                    "port": 8080,
+                    "dnsName": "dam-server"
+                }]
+            }]
+        }'
+fi
+
 # Wait for services to be stable
 log "Waiting for services to be stable..."
 aws ecs wait services-stable \
     --cluster $ECS_CLUSTER_NAME \
-    --services proxysql proxyserver
+    --services proxysql proxyserver query-logging
+
+if [ "$ENABLE_DAM" = true ]; then
+    log "Waiting for DAM services to be stable..."
+    aws ecs wait services-stable \
+        --cluster $ECS_CLUSTER_NAME \
+        --services dam-server
+fi
 
 log "ECS services setup complete!"
 
+# Create infrastructure details file
 cat << EOF > infrastructure-details-${SETUP_NUMBER}.txt
 Infrastructure Details - Setup #${SETUP_NUMBER}
 ---------------------
@@ -918,8 +1358,25 @@ Private Subnet 2: $PRIVATE_SUBNET_2_ID
 Public Subnet 1: $PUBLIC_SUBNET_1_ID
 Public Subnet 2: $PUBLIC_SUBNET_2_ID
 EFS ID: $EFS_ID
-Namespace: $NAMESPACE_NAME
-EOF
+EFS Access Point: $ACCESS_POINT_ID
+S3 Bucket: $BUCKET_NAME
+Secrets Manager: $SECRET_NAME
+Namespace: $NAMESPACE_NAME ($NAMESPACE_ID)
+DAM Enabled: $ENABLE_DAM
 
-log "Setup #${SETUP_NUMBER} deployment is complete."
-log "Details saved to infrastructure-details-${SETUP_NUMBER}.txt"
+Services Created:
+- proxysql
+- proxyserver
+- query-logging
+EOF
+echo ""
+echo "=== Setup Complete ==="
+echo ""
+echo "Setup Number: $SETUP_NUMBER"
+echo "Cluster: $ECS_CLUSTER_NAME"
+echo "Namespace: $NAMESPACE_NAME"
+echo "DAM Enabled: $ENABLE_DAM"
+echo ""
+
+echo "Review infrastructure-details-${SETUP_NUMBER}.txt for complete details"
+echo ""

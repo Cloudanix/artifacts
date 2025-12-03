@@ -6,7 +6,6 @@ set -u  # Treat unset variables as errors
 handle_error() {
     local exit_code=$?
     echo "An error occurred on line $1, exit code $exit_code"
-    # Additional cleanup could be added here
     exit $exit_code
 }
 trap 'handle_error $LINENO' ERR
@@ -23,6 +22,20 @@ prompt_with_default() {
     echo "${user_input:-$default_value}"
 }
 
+prompt_yes_no() {
+    local prompt="$1"
+    local default_value="${2:-n}"
+    while true; do
+        read -p "$prompt (y/n) [$default_value]: " yn
+        yn=${yn:-$default_value}
+        case $yn in
+            [Yy]* ) return 0;;
+            [Nn]* ) return 1;;
+            * ) echo "Please answer yes (y) or no (n).";;
+        esac
+    done
+}
+
 prompt_for_confirmation() {
     local resource_type="$1"
     read -p "Are you sure you want to delete the $resource_type resources? (y/n): " confirm
@@ -34,11 +47,22 @@ prompt_for_confirmation() {
 }
 
 # AWS Configuration
-log "=== JIT Account Infrastructure Cleanup ==="
+log "=== JIT Account Infrastructure Cleanup - Additional VPC ==="
 AWS_REGION=$(prompt_with_default "AWS Region" "us-east-1")
 export AWS_REGION
 ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 SETUP_NUMBER=$(prompt_with_default "Enter the setup number to cleanup" "2")
+
+# Ask about DAM cleanup
+echo ""
+CLEANUP_DAM=false
+if prompt_yes_no "Was DAM (Database Activity Monitoring) enabled in setup #${SETUP_NUMBER}?" "n"; then
+    CLEANUP_DAM=true
+    echo "DAM resources will be included in cleanup"
+else
+    echo "Only ProxySQL resources will be cleaned up"
+fi
+
 PROJECT_NAME="cdx-jit-db"
 ECS_CLUSTER_NAME="${PROJECT_NAME}-cluster-${SETUP_NUMBER}"
 NAMESPACE_NAME="proxysql-proxyserver-${SETUP_NUMBER}"
@@ -47,6 +71,13 @@ NAMESPACE_NAME="proxysql-proxyserver-${SETUP_NUMBER}"
 LOG_GROUP_NAME_1="/ecs/${PROJECT_NAME}/proxyserver-${SETUP_NUMBER}"
 LOG_GROUP_NAME_2="/ecs/${PROJECT_NAME}/proxysql-${SETUP_NUMBER}"
 LOG_GROUP_NAME_3="/ecs/${PROJECT_NAME}/query-logging-${SETUP_NUMBER}"
+
+# DAM-specific log groups
+if [ "$CLEANUP_DAM" = true ]; then
+    LOG_GROUP_NAME_4="/ecs/${PROJECT_NAME}/dam-server-${SETUP_NUMBER}"
+    LOG_GROUP_NAME_5="/ecs/${PROJECT_NAME}/postgresql-${SETUP_NUMBER}"
+fi
+
 SECRET_NAME=$(prompt_with_default "Secrets Manager Secret Name" "CDX_SECRETS")
 BUCKET_NAME=$(prompt_with_default "S3 bucket name" "cdx-jit-db-logs")
 
@@ -57,6 +88,7 @@ log "  ECS Cluster: $ECS_CLUSTER_NAME"
 log "  Namespace: $NAMESPACE_NAME"
 log "  S3 Bucket: $BUCKET_NAME"
 log "  Secret Name: $SECRET_NAME"
+log "  Cleanup DAM: $CLEANUP_DAM"
 
 if ! prompt_for_confirmation "all JIT-DB for setup #$SETUP_NUMBER"; then
     log "Cleanup aborted."
@@ -66,25 +98,32 @@ fi
 # Step 1: Delete ECS Services
 log "Step 1: Deleting ECS Services..."
 if aws ecs describe-clusters --clusters "$ECS_CLUSTER_NAME" --query "clusters[0].status" --output text 2>/dev/null | grep -q "ACTIVE"; then
-    # Delete all services in the cluster
-    SERVICES=$(aws ecs list-services --cluster "$ECS_CLUSTER_NAME" --query "serviceArns" --output text)
+    # Define core services
+    SERVICES=("proxysql" "proxyserver" "query-logging")
     
-    if [ -n "$SERVICES" ]; then
-        for SERVICE in $SERVICES; do
-            SERVICE_NAME=$(basename "$SERVICE")
+    # Add DAM services if cleanup is enabled
+    if [ "$CLEANUP_DAM" = true ]; then
+        SERVICES+=("dam-server" "postgresql")
+    fi
+    
+    for SERVICE_NAME in "${SERVICES[@]}"; do
+        if aws ecs describe-services --cluster "$ECS_CLUSTER_NAME" --services "$SERVICE_NAME" --query "services[?status=='ACTIVE']" --output text 2>/dev/null | grep -q "$SERVICE_NAME"; then
             log "Updating service $SERVICE_NAME to 0 desired count..."
-            aws ecs update-service --cluster "$ECS_CLUSTER_NAME" --service "$SERVICE_NAME" --desired-count 0
+            aws ecs update-service --cluster "$ECS_CLUSTER_NAME" --service "$SERVICE_NAME" --desired-count 0 || true
+            
+            log "Waiting for service $SERVICE_NAME to scale down..."
+            aws ecs wait services-stable --cluster "$ECS_CLUSTER_NAME" --services "$SERVICE_NAME" || true
             
             log "Deleting service $SERVICE_NAME..."
             aws ecs delete-service --cluster "$ECS_CLUSTER_NAME" --service "$SERVICE_NAME" --force
-        done
-        
-        # Wait for services to be deleted
-        log "Waiting for services to be deleted..."
-        sleep 30  # Give AWS some time to start the deletion process
-    else
-        log "No services found in cluster $ECS_CLUSTER_NAME"
-    fi
+        else
+            log "Service $SERVICE_NAME not found, skipping."
+        fi
+    done
+    
+    # Wait for services to be deleted
+    log "Waiting for services to be deleted..."
+    sleep 30
 else
     log "ECS Cluster $ECS_CLUSTER_NAME not found, skipping service deletion."
 fi
@@ -105,6 +144,14 @@ TASK_FAMILIES=(
     "proxysql-${SETUP_NUMBER}"
     "query-logging-task-${SETUP_NUMBER}"
 )
+
+# Add DAM task families if cleanup is enabled
+if [ "$CLEANUP_DAM" = true ]; then
+    TASK_FAMILIES+=(
+        "dam-server-task-${SETUP_NUMBER}"
+        "postgresql-task-${SETUP_NUMBER}"
+    )
+fi
 
 for FAMILY in "${TASK_FAMILIES[@]}"; do
     # Get all active task definition revisions
@@ -134,11 +181,11 @@ if [ -n "$NAMESPACE_ID" ] && [ "$NAMESPACE_ID" != "None" ]; then
             INSTANCES=$(aws servicediscovery list-instances --service-id "$SERVICE_ID" --query "Instances[].Id" --output text)
             for INSTANCE_ID in $INSTANCES; do
                 log "Deregistering service instance $INSTANCE_ID..."
-                aws servicediscovery deregister-instance --service-id "$SERVICE_ID" --instance-id "$INSTANCE_ID"
+                aws servicediscovery deregister-instance --service-id "$SERVICE_ID" --instance-id "$INSTANCE_ID" || true
             done
             
             log "Deleting service $SERVICE_ID from namespace..."
-            aws servicediscovery delete-service --id "$SERVICE_ID"
+            aws servicediscovery delete-service --id "$SERVICE_ID" || true
         done
     fi
     
@@ -173,6 +220,14 @@ LOG_GROUPS=(
     "$LOG_GROUP_NAME_2"
     "$LOG_GROUP_NAME_3"
 )
+
+# Add DAM log groups if cleanup is enabled
+if [ "$CLEANUP_DAM" = true ]; then
+    LOG_GROUPS+=(
+        "$LOG_GROUP_NAME_4"
+        "$LOG_GROUP_NAME_5"
+    )
+fi
 
 for LOG_GROUP in "${LOG_GROUPS[@]}"; do
     if aws logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" --query "logGroups[0].logGroupName" --output text 2>/dev/null | grep -q "$LOG_GROUP"; then
@@ -284,9 +339,20 @@ fi
 
 # Step 10: Remove resources from IAM policies
 log "Step 10: Checking if IAM policies need to be updated..."
-# This is a check-only step without automatic modification due to complexity
-log "The following IAM policies may have resources related to this setup:"
+log "The following IAM policies may have resources related to setup #$SETUP_NUMBER:"
 log "- cdx-S3AccessPolicy - Contains S3 bucket ARNs: arn:aws:s3:::$BUCKET_NAME*"
+log "- cdx-CloudWatchLogsPolicy - Contains log group ARNs for setup #$SETUP_NUMBER"
+
+if [ "$CLEANUP_DAM" = true ]; then
+    log "Note: DAM-specific resources (PostgreSQL, DAM Server) were also removed."
+fi
+
 log "Consider manually reviewing and updating these policies if needed."
 
-log "All cleanup operations for setup #$SETUP_NUMBER completed."
+log ""
+log "=== Cleanup Complete ==="
+if [ "$CLEANUP_DAM" = true ]; then
+    log "All cleanup operations for setup #$SETUP_NUMBER (including DAM) completed."
+else
+    log "All cleanup operations for setup #$SETUP_NUMBER (ProxySQL only) completed."
+fi
