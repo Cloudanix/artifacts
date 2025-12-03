@@ -747,8 +747,8 @@ cat <<EOF >> "proxyserver-task-definition-${SETUP_NUMBER}.json"
     "requiresCompatibilities": [
         "FARGATE"
     ],
-    "cpu": "512",
-    "memory": "2048",
+    "cpu": "256",
+    "memory": "1024",
     "tags": $TASK_TAGS
 }
 EOF
@@ -819,8 +819,8 @@ cat <<EOF > "proxysql-task-definition-${SETUP_NUMBER}.json"
     "requiresCompatibilities": [
         "FARGATE"
     ],
-    "cpu": "512",
-    "memory": "2048",
+    "cpu": "256",
+    "memory": "1024",
     "tags": $TASK_TAGS
 }
 EOF
@@ -935,8 +935,8 @@ cat <<EOF >> "query-logging-task-definition-${SETUP_NUMBER}.json"
     "requiresCompatibilities": [
         "FARGATE"
     ],
-    "cpu": "512",
-    "memory": "2048",
+    "cpu": "256",
+    "memory": "1024",
     "tags": $TASK_TAGS
 }
 EOF
@@ -1060,8 +1060,8 @@ if [ "$ENABLE_DAM" = true ]; then
     "requiresCompatibilities": [
         "FARGATE"
     ],
-    "cpu": "512",
-    "memory": "2048",
+    "cpu": "256",
+    "memory": "1024",
     "tags": $TASK_TAGS
 }
 EOF
@@ -1159,8 +1159,8 @@ EOF
     "requiresCompatibilities": [
         "FARGATE"
     ],
-    "cpu": "512",
-    "memory": "2048",
+    "cpu": "256",
+    "memory": "1024",
     "tags": $TASK_TAGS
 }
 EOF
