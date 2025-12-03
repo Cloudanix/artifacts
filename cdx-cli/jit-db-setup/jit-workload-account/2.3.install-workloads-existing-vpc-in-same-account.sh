@@ -365,12 +365,12 @@ CDX_API_BASE=$(prompt_with_default "CDX_API_BASE" "https://console.cloudanix.com
 
 # DAM-specific secrets
 if [ "$ENABLE_DAM" = true ]; then
+    ENCRYPTION_KEY=$(prompt_with_default "ENCRYPTION_KEY" "123890234")
     POSTGRES_PASSWORD=$(prompt_with_default "PostgreSQL Password (leave empty to auto-generate)" "")
     if [ -z "$POSTGRES_PASSWORD" ]; then
         POSTGRES_PASSWORD=$(openssl rand -base64 32)
         echo "Generated PostgreSQL password: $POSTGRES_PASSWORD"
     fi
-    RAILS_MASTER_KEY=$(prompt_with_default "Rails Master Key" "")
 fi
 
 # Tags configuration
@@ -384,7 +384,7 @@ log "Creating Secrets in Secret Manager..."
 
 # Build secrets JSON based on DAM enabled/disabled
 if [ "$ENABLE_DAM" = true ]; then
-    SECRET_STRING="{\"CDX_AUTH_TOKEN\": \"$CDX_AUTH_TOKEN\", \"CDX_SIGNATURE_SECRET_KEY\": \"$CDX_SIGNATURE_SECRET_KEY\", \"CDX_SENTRY_DSN\": \"$CDX_SENTRY_DSN\", \"CDX_DC\": \"$CDX_DC\", \"CDX_API_BASE\": \"$CDX_API_BASE\", \"CDX_LOGGING_S3_BUCKET\": \"$BUCKET_NAME\", \"POSTGRES_PASSWORD\": \"$POSTGRES_PASSWORD\", \"RAILS_MASTER_KEY\": \"$RAILS_MASTER_KEY\"}"
+    SECRET_STRING="{\"CDX_AUTH_TOKEN\": \"$CDX_AUTH_TOKEN\", \"CDX_SIGNATURE_SECRET_KEY\": \"$CDX_SIGNATURE_SECRET_KEY\", \"CDX_SENTRY_DSN\": \"$CDX_SENTRY_DSN\", \"CDX_DC\": \"$CDX_DC\", \"CDX_API_BASE\": \"$CDX_API_BASE\", \"CDX_LOGGING_S3_BUCKET\": \"$BUCKET_NAME\", \"POSTGRES_PASSWORD\": \"$POSTGRES_PASSWORD\", \"ENCRYPTION_KEY\": \"$ENCRYPTION_KEY\" }"
 else
     SECRET_STRING="{\"CDX_AUTH_TOKEN\": \"$CDX_AUTH_TOKEN\", \"CDX_SIGNATURE_SECRET_KEY\": \"$CDX_SIGNATURE_SECRET_KEY\", \"CDX_SENTRY_DSN\": \"$CDX_SENTRY_DSN\", \"CDX_DC\": \"$CDX_DC\", \"CDX_API_BASE\": \"$CDX_API_BASE\", \"CDX_LOGGING_S3_BUCKET\": \"$BUCKET_NAME\"}"
 fi
@@ -701,6 +701,11 @@ if [ "$ENABLE_DAM" = true ]; then
                     "name": "POSTGRES_PASSWORD",
                     "valueFrom": "$SECRET_ARN:POSTGRES_PASSWORD::"
                 }
+                ,
+                {
+                    "name": "ENCRYPTION_KEY",
+                    "valueFrom": "$SECRET_ARN:ENCRYPTION_KEY::"
+                }
 EOF
 fi
 
@@ -1009,10 +1014,6 @@ if [ "$ENABLE_DAM" = true ]; then
                 {
                     "name": "CDX_API_BASE",
                     "valueFrom": "$SECRET_ARN:CDX_API_BASE::"
-                },
-                {
-                    "name": "RAILS_MASTER_KEY",
-                    "valueFrom": "$SECRET_ARN:RAILS_MASTER_KEY::"
                 },
                 {
                     "name": "POSTGRES_PASSWORD",

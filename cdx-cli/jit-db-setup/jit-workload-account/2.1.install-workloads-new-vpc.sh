@@ -358,12 +358,12 @@ CDX_API_BASE=$(prompt_with_default "CDX_API_BASE" "https://console.cloudanix.com
 
 # DAM-specific secrets
 if [ "$ENABLE_DAM" = true ]; then
+    ENCRYPTION_KEY=$(prompt_with_default "ENCRYPTION_KEY" "123890234")
     POSTGRES_PASSWORD=$(prompt_with_default "PostgreSQL Password (leave empty to auto-generate)" "")
     if [ -z "$POSTGRES_PASSWORD" ]; then
         POSTGRES_PASSWORD=$(openssl rand -base64 32)
         echo "Generated PostgreSQL password: $POSTGRES_PASSWORD"
     fi
-    RAILS_MASTER_KEY=$(prompt_with_default "Rails Master Key" "")
 fi
 
 # Tags configuration
@@ -610,32 +610,40 @@ aws iam create-policy \
 log "Creating custom CloudWatch Logs policy..."
 LOGS_POLICY_NAME="cdx-CloudWatchLogsPolicy"
 
-# Build log group ARNs based on DAM enabled/disabled
-LOG_GROUP_ARNS="\"arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_1:*\",
-                \"arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_2:*\",
-                \"arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_3:*\""
+# Build array of ARNs
+LOG_GROUP_ARNS=(
+    "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_1:*"
+    "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_2:*"
+    "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_3:*"
+)
 
 if [ "$ENABLE_DAM" = true ]; then
-    LOG_GROUP_ARNS="$LOG_GROUP_ARNS,
-                    \"arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_4:*\",
-                    \"arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_5:*\""
+    LOG_GROUP_ARNS+=(
+        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_4:*"
+        "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_5:*"
+    )
 fi
 
+# Convert bash array → JSON array
+LOG_GROUP_ARNS_JSON=$(printf '"%s",' "${LOG_GROUP_ARNS[@]}")
+LOG_GROUP_ARNS_JSON="[${LOG_GROUP_ARNS_JSON%,}]"
+
 aws iam create-policy \
-    --policy-name $LOGS_POLICY_NAME \
-    --policy-document '{
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Effect": "Allow",
-                "Action": [
-                    "logs:*",
-                    "cloudwatch:GenerateQuery"
-                ],
-                "Resource": ['$LOG_GROUP_ARNS']
-            }
-        ]
-    }'
+  --policy-name "$LOGS_POLICY_NAME" \
+  --policy-document "{
+    \"Version\": \"2012-10-17\",
+    \"Statement\": [
+      {
+        \"Effect\": \"Allow\",
+        \"Action\": [
+          \"logs:*\",
+          \"cloudwatch:GenerateQuery\"
+        ],
+        \"Resource\": $LOG_GROUP_ARNS_JSON
+      }
+    ]
+  }"
+
 
 # Store policy ARNs in variables
 SECRETS_POLICY_ARN=$(aws iam list-policies --query 'Policies[?PolicyName==`cdx-ECSSecretsAccessPolicy`].Arn' --output text)
@@ -698,7 +706,7 @@ log "Creating Secrets in Secret Manager ..."
 
 # Build secrets JSON based on DAM enabled/disabled
 if [ "$ENABLE_DAM" = true ]; then
-    SECRET_STRING="{\"CDX_AUTH_TOKEN\": \"$CDX_AUTH_TOKEN\", \"CDX_SIGNATURE_SECRET_KEY\": \"$CDX_SIGNATURE_SECRET_KEY\", \"CDX_SENTRY_DSN\": \"$CDX_SENTRY_DSN\", \"CDX_DC\": \"$CDX_DC\", \"CDX_API_BASE\": \"$CDX_API_BASE\", \"CDX_LOGGING_S3_BUCKET\": \"$BUCKET_NAME\", \"POSTGRES_PASSWORD\": \"$POSTGRES_PASSWORD\", \"RAILS_MASTER_KEY\": \"$RAILS_MASTER_KEY\"}"
+    SECRET_STRING="{\"CDX_AUTH_TOKEN\": \"$CDX_AUTH_TOKEN\", \"CDX_SIGNATURE_SECRET_KEY\": \"$CDX_SIGNATURE_SECRET_KEY\", \"CDX_SENTRY_DSN\": \"$CDX_SENTRY_DSN\", \"CDX_DC\": \"$CDX_DC\", \"CDX_API_BASE\": \"$CDX_API_BASE\", \"CDX_LOGGING_S3_BUCKET\": \"$BUCKET_NAME\", \"POSTGRES_PASSWORD\": \"$POSTGRES_PASSWORD\", \"ENCRYPTION_KEY\": \"$ENCRYPTION_KEY\" }"
 else
     SECRET_STRING="{\"CDX_AUTH_TOKEN\": \"$CDX_AUTH_TOKEN\", \"CDX_SIGNATURE_SECRET_KEY\": \"$CDX_SIGNATURE_SECRET_KEY\", \"CDX_SENTRY_DSN\": \"$CDX_SENTRY_DSN\", \"CDX_DC\": \"$CDX_DC\", \"CDX_API_BASE\": \"$CDX_API_BASE\", \"CDX_LOGGING_S3_BUCKET\": \"$BUCKET_NAME\"}"
 fi
@@ -951,6 +959,12 @@ if [ "$ENABLE_DAM" = true ]; then
                     "name": "POSTGRES_PASSWORD",
                     "valueFrom": "$SECRET_ARN:POSTGRES_PASSWORD::"
                 }
+                ,
+                {
+                    "name": "ENCRYPTION_KEY",
+                    "valueFrom": "$SECRET_ARN:ENCRYPTION_KEY::"
+                }
+
 EOF
 fi
 
@@ -1271,10 +1285,6 @@ if [ "$ENABLE_DAM" = true ]; then
                 {
                     "name": "CDX_API_BASE",
                     "valueFrom": "$SECRET_ARN:CDX_API_BASE::"
-                },
-                {
-                    "name": "RAILS_MASTER_KEY",
-                    "valueFrom": "$SECRET_ARN:RAILS_MASTER_KEY::"
                 },
                 {
                     "name": "POSTGRES_PASSWORD",
