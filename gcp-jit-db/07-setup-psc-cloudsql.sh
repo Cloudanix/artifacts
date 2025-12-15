@@ -48,10 +48,13 @@ echo
 
 # Enable PSC on Cloud SQL
 echo "Enabling PSC on Cloud SQL instance..."
+PSC_PRIMARY_IP="$(echo "$PSC_IP" | sed 's/\./_/g')"
+
 gcloud sql instances patch $DB_INSTANCE \
   --enable-private-service-connect \
   --allowed-psc-projects=$JIT_PROJECT \
   --project=$DB_PROJECT \
+  --update-labels psc_primary_ip=$PSC_PRIMARY_IP,psc_consumer_project=$JIT_PROJECT,psc_region=$REGION \
   --quiet
 
 # Wait for operation
