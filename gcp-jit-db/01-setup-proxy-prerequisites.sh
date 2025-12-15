@@ -84,7 +84,7 @@ else
     --organization=$GCP_ORG_ID \
     --title="Cloudanix JIT DB Proxy Access Custom Role" \
     --description="Custom role to allow fetching Proxy Info using labels and IAP tunnel access." \
-    --permissions="compute.projects.get,compute.instances.list,compute.instances.get,compute.instances.getGuestAttributes,compute.zones.list,compute.zones.get,compute.networks.get,compute.subnetworks.get,iap.tunnelDestGroups.accessViaIAP,iap.tunnelInstances.accessViaIAP" \
+    --permissions="compute.instances.get,compute.instances.getGuestAttributes,compute.instances.list,compute.instances.setMetadata,compute.networks.get,compute.projects.get,compute.subnetworks.get,compute.zones.get,compute.zones.list,iam.serviceAccounts.actAs,iam.serviceAccounts.get,iam.serviceAccounts.list,iap.tunnelDestGroups.accessViaIAP,iap.tunnelInstances.accessViaIAP,resourcemanager.projects.get,resourcemanager.projects.list" \
     --stage="GA"
 fi
 
