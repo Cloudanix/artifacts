@@ -4,23 +4,29 @@
 
 set -e
 
-# Configuration
-JIT_PROJECT="${JIT_PROJECT:-cloud-project-id}"
-JIT_NETWORK="${JIT_NETWORK:-cdx-jit-network}"
-JIT_SUBNET="${JIT_SUBNET:-cdx-jit-subnet}"
-REGION="${REGION:-us-central1}"
-
 echo "=== PSC Cloud SQL Setup ==="
 echo ""
 
+# Configuration
+REGION="us-central1"
+
 # Input: Cloud SQL details
-read -p "Cloud SQL project ID [$JIT_PROJECT]: " DB_PROJECT
-DB_PROJECT=${DB_PROJECT:-$JIT_PROJECT}
+read -p "JIT Proxy Project ID [cdx-jit-db-proxy]: " JIT_PROJECT
+JIT_PROJECT=${JIT_PROJECT:-cdx-jit-db-proxy}
+
+read -p "JIT Network name [cdx-jit-network]: " JIT_NETWORK
+JIT_NETWORK="${JIT_NETWORK:-cdx-jit-network}"
+
+read -p "JIT Subnet name [cdx-jit-subnet]: " JIT_SUBNET
+JIT_SUBNET="${JIT_SUBNET:-cdx-jit-subnet}"
+
+read -p "Cloud SQL project ID [cloud-project-id]: " DB_PROJECT
+DB_PROJECT=${DB_PROJECT:-cloud-project-id}
 
 read -p "Cloud SQL instance name: " DB_INSTANCE
 [ -z "$DB_INSTANCE" ] && { echo "Instance name required"; exit 1; }
 
-read -p "Desired PSC endpoint IP (e.g., 10.0.1.108): " PSC_IP
+read -p "Desired Private Service Connect endpoint IP (e.g., 10.236.1.108): " PSC_IP
 [ -z "$PSC_IP" ] && { echo "IP address required"; exit 1; }
 
 ENDPOINT_NAME="${DB_INSTANCE}-psc-endpoint"
@@ -28,11 +34,13 @@ IP_NAME="${DB_INSTANCE}-psc-ip"
 
 echo ""
 echo "Configuration:"
+echo "  Region: $REGION"
 echo "  DB Project: $DB_PROJECT"
 echo "  DB Instance: $DB_INSTANCE"
 echo "  JIT Project: $JIT_PROJECT"
 echo "  JIT Network: $JIT_NETWORK"
-echo "  PSC IP: $PSC_IP"
+echo "  JIT Subnet: $JIT_SUBNET"
+echo "  Private Service Connect IP: $PSC_IP"
 echo ""
 read -p "Continue? (y/n) " -n 1 -r
 echo

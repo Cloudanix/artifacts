@@ -305,7 +305,8 @@ echo "Creating GKE bastion..."
 cat > /tmp/bastion-startup.sh <<'EOF'
 #!/bin/bash
 apt-get update -qq
-apt-get install -y kubectl google-cloud-sdk-gke-gcloud-auth-plugin git
+DEBIAN_FRONTEND=noninteractive apt-get install -y kubectl google-cloud-sdk-gke-gcloud-auth-plugin git curl
+
 EOF
 
 if ! gcloud compute instances describe $BASTION_VM --zone=$ZONE --project=$PROJECT_ID &>/dev/null; then
