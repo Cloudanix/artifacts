@@ -47,7 +47,7 @@ fi
 
 # Grant IAM roles
 echo "Granting IAM roles..."
-for role in secretmanager.secretAccessor logging.logWriter storage.objectViewer; do
+for role in secretmanager.secretAccessor logging.logWriter storage.objectAdmin iam.serviceAccountTokenCreator; do
   gcloud projects add-iam-policy-binding $PROJECT_ID \
     --member="serviceAccount:${GCP_SA_EMAIL}" \
     --role="roles/${role}" \
