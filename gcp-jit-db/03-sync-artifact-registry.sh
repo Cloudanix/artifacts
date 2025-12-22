@@ -86,7 +86,7 @@ for IMAGE in "${IMAGES[@]}"; do
 
   echo "🔄 Syncing ${IMAGE}"
 
-  docker pull "$CDX_IMAGE"
+  docker pull  --platform=linux/amd64 "$CDX_IMAGE"
   docker tag "$CDX_IMAGE" "$CUSTOMER_IMAGE"
   docker push "$CUSTOMER_IMAGE"
 
