@@ -1,7 +1,4 @@
 #!/bin/bash
-# 01-setup-infrastructure.sh
-# Purpose: Complete JIT infrastructure setup
-
 set -e
 
 echo "=== JIT Infrastructure Setup ==="
@@ -33,7 +30,8 @@ BUCKET_NAME="${PREFIX}-jit-storage-${PROJECT_ID}"
 SECRET_NAME="${PREFIX}-jit-secrets"
 
 # Tags
-TAGS="owner=cloudanix,service=iap-proxy,purpose=cdx-jit-db"
+TAGS_VM="owner=cloudanix,service=iap-proxy,purpose=cdx-jit-db"
+TAGS="owner=cloudanix,purpose=cdx-jit-db"
 
 # Input: Network CIDR
 read -p "Network CIDR [10.236.0.0/16]: " NETWORK_CIDR
@@ -292,7 +290,7 @@ if ! gcloud compute instances describe $JUMP_VM --zone=$ZONE --project=$PROJECT_
     --subnet=$SUBNET_NAME \
     --no-address \
     --tags=jump-vm \
-    --labels=$(echo $TAGS | tr ',' '\n' | paste -sd,) \
+    --labels=$(echo $TAGS_VM | tr ',' '\n' | paste -sd,) \
     --metadata=proxysql-ilb=$PROXYSQL_ILB,proxyserver-ilb=$PROXYSERVER_ILB,dam-server-ilb=$DAM_SERVER_ILB \
     --metadata-from-file=startup-script=/tmp/jump-startup.sh \
     --boot-disk-size=20GB \
