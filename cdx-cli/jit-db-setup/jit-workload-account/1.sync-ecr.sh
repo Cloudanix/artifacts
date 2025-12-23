@@ -53,11 +53,11 @@ TARGET_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 echo "Your AWS Account ID is: $TARGET_ACCOUNT_ID"
 
 SOURCE_REGION="us-east-2"
-TARGET_REGION_INPUT="${1-"us-east-1"}"
+TARGET_REGION_INPUT="${1:-"us-east-1"}"
 TARGET_REGION=$(prompt_with_default "Enter the region of jit db setup" "$TARGET_REGION_INPUT")
 
-IMAGE_VERSION_TAG="v0.3.12"
-IMAGE_TAG=$(prompt_with_default "Enter the tag of image" "$IMAGE_VERSION_TAG")
+IMAGE_TAG_INPUT="${2:-"latest"}"
+IMAGE_TAG=$(prompt_with_default "Enter the image tag to pull and push" "$IMAGE_TAG_INPUT")
 PLATFORM="linux/amd64"
 
 echo ""
@@ -87,7 +87,7 @@ for REPO in "${REPOSITORIES[@]}"; do
     aws ecr describe-repositories --region "$TARGET_REGION" --repository-names "$REPO" >/dev/null 2>&1 \
         || aws ecr create-repository --region "$TARGET_REGION" --repository-name "$REPO"
 
-    echo "Pulling image from source account..."
+    echo "Pulling image from source account with tag: $IMAGE_TAG..."
     docker pull --platform "$PLATFORM" "$SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/$REPO:$IMAGE_TAG"
 
     echo "Tagging image for target account..."
