@@ -47,7 +47,7 @@ fi
 
 # Grant IAM roles
 echo "Granting IAM roles..."
-for role in secretmanager.secretAccessor logging.logWriter storage.objectAdmin iam.serviceAccountTokenCreator; do
+for role in secretmanager.secretAccessor logging.logWriter storage.objectAdmin iam.serviceAccountTokenCreator secretmanager.secretAccessor logging.logWriter storage.objectViewer; do
   gcloud projects add-iam-policy-binding $PROJECT_ID \
     --member="serviceAccount:${GCP_SA_EMAIL}" \
     --role="roles/${role}" \
@@ -143,7 +143,7 @@ POSTGRES_IMAGE="${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/gcp-ar-ji
 PROXYSQL_IMAGE="${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/gcp-ar-jit-proxy-sql:latest"
 PROXYSERVER_IMAGE="${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/gcp-ar-jit-proxy-server:latest"
 QUERYLOG_IMAGE="${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/gcp-ar-jit-query-logging:latest"
-DAM_IMAGE="${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/gcp-ar-jit-dam-server:v1.0.0"
+DAM_IMAGE="${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/gcp-ar-jit-dam-server:latest"
 cat > jit-service-manifest.yaml <<EOF
 ---
 apiVersion: v1
