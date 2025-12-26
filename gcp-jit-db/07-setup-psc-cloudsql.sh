@@ -8,7 +8,7 @@ echo "=== PSC Cloud SQL Setup ==="
 echo ""
 
 # Configuration
-REGION="us-central1"
+REGION="$1"
 
 # Input: Cloud SQL details
 read -p "JIT Proxy Project ID [cdx-jit-db-proxy]: " JIT_PROJECT
@@ -78,6 +78,79 @@ if [ -z "$SERVICE_ATTACHMENT" ]; then
 fi
 
 echo "Service attachment: $SERVICE_ATTACHMENT"
+
+# Find subnet in DB region
+echo ""
+echo "Looking for subnet in $REGION..."
+JIT_SUBNET=$(gcloud compute networks subnets list \
+  --network=$JIT_NETWORK \
+  --project=$JIT_PROJECT \
+  --filter="region:$REGION" \
+  --format="value(name)" \
+  --limit=1 2>/dev/null)
+
+if [ -z "$JIT_SUBNET" ]; then
+  echo "No subnet found in $REGION"
+  echo ""
+  
+  # Auto-create subnet
+  NEW_SUBNET_NAME="cdx-jit-subnet-${REGION}"
+  
+  # Get existing CIDRs to avoid conflicts
+  EXISTING_CIDRS=$(gcloud compute networks subnets list \
+    --network=$JIT_NETWORK \
+    --project=$JIT_PROJECT \
+    --format="value(ipCidrRange)" 2>/dev/null)
+  
+  # Suggest non-conflicting CIDR
+  if echo "$EXISTING_CIDRS" | grep -q "10.238."; then
+    DEFAULT_CIDR="10.239.0.0/16"
+  elif echo "$EXISTING_CIDRS" | grep -q "10.239."; then
+    DEFAULT_CIDR="10.240.0.0/16"
+  elif echo "$EXISTING_CIDRS" | grep -q "10.240."; then
+    DEFAULT_CIDR="10.241.0.0/16"
+  else
+    DEFAULT_CIDR="10.238.0.0/16"
+  fi
+  
+  echo "Creating new subnet for PSC endpoint"
+  
+  echo ""
+  echo "Will create:"
+  echo "  Name: $NEW_SUBNET_NAME"
+  echo "  Region: $REGION"
+  echo "  CIDR: $DEFAULT_CIDR"
+  echo ""
+  read -p "Create subnet? (y/n) " -n 1 -r
+  echo
+  
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Cannot proceed without subnet in $REGION"
+    exit 1
+  fi
+  
+  echo "Creating subnet..."
+  gcloud compute networks subnets create $NEW_SUBNET_NAME \
+    --network=$JIT_NETWORK \
+    --region=$REGION \
+    --range=$DEFAULT_CIDR \
+    --enable-private-ip-google-access \
+    --project=$JIT_PROJECT \
+    --quiet
+
+  JIT_SUBNET=$NEW_SUBNET_NAME
+  SUBNET_CIDR=$DEFAULT_CIDR
+  echo "Subnet created"
+else
+  echo "Found subnet: $JIT_SUBNET"
+  SUBNET_CIDR=$(gcloud compute networks subnets describe $JIT_SUBNET \
+    --region=$REGION \
+    --project=$JIT_PROJECT \
+    --format="value(ipCidrRange)")
+fi
+
+echo ""
+echo "Using subnet: $JIT_SUBNET ($SUBNET_CIDR)"
 
 # Create IP address reservation
 echo "Reserving IP address..."
