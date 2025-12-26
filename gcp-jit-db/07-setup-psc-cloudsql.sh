@@ -54,6 +54,10 @@ gcloud sql instances patch $DB_INSTANCE \
   --enable-private-service-connect \
   --allowed-psc-projects=$JIT_PROJECT \
   --project=$DB_PROJECT \
+  --quiet
+
+gcloud beta sql instances patch $DB_INSTANCE \
+  --project=$DB_PROJECT \
   --update-labels psc_primary_ip=$PSC_PRIMARY_IP,psc_consumer_project=$JIT_PROJECT,psc_region=$REGION \
   --quiet
 
