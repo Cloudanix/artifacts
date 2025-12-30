@@ -1,8 +1,4 @@
 #!/bin/bash
-# add-ssl-certs-to-proxysql.sh
-# Purpose: Add SSL certificates to existing ProxySQL deployment
-# Run this on GKE bastion VM
-
 set -e
 
 NAMESPACE="jit-services"
