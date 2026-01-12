@@ -6,8 +6,12 @@ set -euo pipefail
 # =========================
 
 # Customer Artifact Registry details
-GCP_PROJECT_ID="$1"
-GCP_PROJECT_REGION="${2:-"us-central1"}"
+read -p "GCP Project ID: " GCP_PROJECT_ID
+[ -z "$GCP_PROJECT_ID" ] && { echo "Project ID required"; exit 1; }
+
+read -p "Artifact Registry Region [us-central1]: " GCP_PROJECT_REGION
+GCP_PROJECT_REGION="${GCP_PROJECT_REGION:-us-central1}"
+
 ARTIFACTS_REGISTRY_NAME="cdx-jit-db-artifacts"
 
 # Cloudanix Artifact Registry details
@@ -15,7 +19,7 @@ CDX_GCP_PROJECT="cloudanix-app"
 CDX_ARTIFACTS_REGISTRY_REGION="us-central1"
 CDX_ARTIFACTS_REGISTRY_NAME="cdx-jit-db-artifacts"
 
-ARTIFACTS_MANAGER_SA="${3:-"cdx-artifacts-manager"}"
+ARTIFACTS_MANAGER_SA="cdx-artifacts-manager"
 
 prompt_with_options() {
   local prompt="$1"
@@ -44,6 +48,7 @@ fi
 # AUTH GCP ARTIFACTS REGISTRY
 # =========================
 # Step 1: Authenticate as yourself
+# TODO: use - gcloud auth login --no-launch-browser
 gcloud auth login
 
 # Step 2: Impersonate CUSTOMER sync SA

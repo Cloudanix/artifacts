@@ -4,14 +4,17 @@ set -euo pipefail
 # =========================
 # CONFIG
 # =========================
-GCP_PROJECT_ID="$1"
-ARTIFACTS_REGISTRY_REGION="${2:-"us-central1"}"
-ARTIFACTS_REGISTRY_NAME="cdx-jit-db-artifacts"
+read -p "GCP Project ID: " GCP_PROJECT_ID
+[ -z "$GCP_PROJECT_ID" ] && { echo "Project ID required"; exit 1; }
+
+read -p "Artifact Registry Region [us-central1]: " ARTIFACTS_REGISTRY_REGION
+ARTIFACTS_REGISTRY_REGION="${ARTIFACTS_REGISTRY_REGION:-us-central1}"
+
+read -p "Artifact Registry Sync User Email: " ACR_SYNC_USER_EMAIL
+[ -z "$ACR_SYNC_USER_EMAIL" ] && { echo "Artifact Registry Sync User Email required"; exit 1; }
+
 ARTIFACTS_MANAGER_SA="cdx-artifacts-manager"
 
-ACR_SYNC_USER_EMAIL="$3"
-
-# =========================
 # CREATE ARTIFACT REGISTRY
 # =========================
 gcloud iam service-accounts add-iam-policy-binding \

@@ -4,9 +4,16 @@ set -euo pipefail
 # =========================
 # CONFIG
 # =========================
-GCP_ORG_ID="$1"
-GCP_PROJECT_ID="$2"
-ARTIFACTS_REGISTRY_REGION="${3:-"us-central1"}"
+
+read -p "GCP Organization ID: " GCP_ORG_ID
+[ -z "$GCP_ORG_ID" ] && { echo "Organization ID required"; exit 1; }
+
+read -p "GCP Project ID: " GCP_PROJECT_ID
+[ -z "$GCP_PROJECT_ID" ] && { echo "Project ID required"; exit 1; }
+
+read -p "Artifact Registry Region [us-central1]: " ARTIFACTS_REGISTRY_REGION
+ARTIFACTS_REGISTRY_REGION="${ARTIFACTS_REGISTRY_REGION:-us-central1}"
+
 ARTIFACTS_REGISTRY_NAME="cdx-jit-db-artifacts"
 ARTIFACTS_MANAGER_SA="cdx-artifacts-manager"
 

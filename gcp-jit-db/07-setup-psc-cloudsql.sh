@@ -8,8 +8,6 @@ echo "=== PSC Cloud SQL Setup ==="
 echo ""
 
 # Configuration
-REGION="$1"
-
 # Input: Cloud SQL details
 read -p "JIT Proxy Project ID [cdx-jit-db-proxy]: " JIT_PROJECT
 JIT_PROJECT=${JIT_PROJECT:-cdx-jit-db-proxy}
@@ -28,6 +26,9 @@ read -p "Cloud SQL instance name: " DB_INSTANCE
 
 read -p "Desired Private Service Connect endpoint IP (e.g., 10.236.1.108): " PSC_IP
 [ -z "$PSC_IP" ] && { echo "IP address required"; exit 1; }
+
+read -p "Cloud SQL region (e.g., us-central1): " REGION
+REGION="${REGION:-us-central1}"
 
 ENDPOINT_NAME="${DB_INSTANCE}-psc-endpoint"
 IP_NAME="${DB_INSTANCE}-psc-ip"
