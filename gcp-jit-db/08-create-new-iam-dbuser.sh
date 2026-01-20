@@ -19,7 +19,7 @@ echo "Default GKE Service Account pattern: cdx-jit-workload-sa@${GKE_PROJECT_ID}
 read -p "Enter GKE Service Account (press Enter to use default): " GKE_SERVICE_ACCOUNT
 GKE_SERVICE_ACCOUNT=${GKE_SERVICE_ACCOUNT:-"cdx-jit-workload-sa@${GKE_PROJECT_ID}.iam.gserviceaccount.com"}
 
-read -p "Enter IAM DB Service Account Name(s) (space-separated for multiple): " IAM_DB_SERVICE_ACCOUNT_NAMES
+read -p "Enter IAM DB User Name(s) (space-separated for multiple): " IAM_DB_USER_NAMES
 
 echo ""
 echo "================================================"
@@ -30,7 +30,7 @@ echo "Database Type: $DB_TYPE"
 echo "DB User Project ID: $DB_USER_PROJECT_ID"
 echo "GKE Project ID: $GKE_PROJECT_ID"
 echo "GKE Service Account: $GKE_SERVICE_ACCOUNT"
-echo "Service Account(s): $IAM_DB_SERVICE_ACCOUNT_NAMES"
+echo "Service Account(s): $IAM_DB_USER_NAMES"
 echo "================================================"
 echo ""
 read -p "Continue with this configuration? (y/n): " CONFIRM
@@ -82,7 +82,7 @@ for SQL_INSTANCE_NAME in "${SQL_INSTANCES_ARRAY[@]}"; do
 done
 
 # Convert space-separated string to array
-IFS=' ' read -ra SA_NAMES_ARRAY <<< "$IAM_DB_SERVICE_ACCOUNT_NAMES"
+IFS=' ' read -ra SA_NAMES_ARRAY <<< "$IAM_DB_USER_NAMES"
 
 echo "================================================"
 echo "Processing ${#SA_NAMES_ARRAY[@]} service account(s)..."
