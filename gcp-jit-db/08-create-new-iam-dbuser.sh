@@ -19,7 +19,6 @@ echo "Default GKE Service Account pattern: cdx-jit-workload-sa@${GKE_PROJECT_ID}
 read -p "Enter GKE Service Account (press Enter to use default): " GKE_SERVICE_ACCOUNT
 GKE_SERVICE_ACCOUNT=${GKE_SERVICE_ACCOUNT:-"cdx-jit-workload-sa@${GKE_PROJECT_ID}.iam.gserviceaccount.com"}
 
-read -p "Enter Database Name: " DATABASE_NAME
 read -p "Enter IAM DB Service Account Name(s) (space-separated for multiple): " IAM_DB_SERVICE_ACCOUNT_NAMES
 
 echo ""
@@ -31,7 +30,6 @@ echo "Database Type: $DB_TYPE"
 echo "DB User Project ID: $DB_USER_PROJECT_ID"
 echo "GKE Project ID: $GKE_PROJECT_ID"
 echo "GKE Service Account: $GKE_SERVICE_ACCOUNT"
-echo "Database Name: $DATABASE_NAME"
 echo "Service Account(s): $IAM_DB_SERVICE_ACCOUNT_NAMES"
 echo "================================================"
 echo ""
@@ -221,5 +219,4 @@ echo "✓ Setup completed successfully!"
 echo "================================================"
 echo "Total service accounts created/configured: ${#CREATED_ACCOUNTS[@]}"
 echo "Total Cloud SQL instances processed: ${#SQL_INSTANCES_ARRAY[@]}"
-echo "Database Name: $DATABASE_NAME"
 echo "================================================"
