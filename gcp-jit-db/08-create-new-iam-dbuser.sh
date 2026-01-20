@@ -30,7 +30,7 @@ echo "Database Type: $DB_TYPE"
 echo "DB User Project ID: $DB_USER_PROJECT_ID"
 echo "GKE Project ID: $GKE_PROJECT_ID"
 echo "GKE Service Account: $GKE_SERVICE_ACCOUNT"
-echo "Service Account(s): $IAM_DB_USER_NAMES"
+echo "DB Username(s): $IAM_DB_USER_NAMES"
 echo "================================================"
 echo ""
 read -p "Continue with this configuration? (y/n): " CONFIRM
