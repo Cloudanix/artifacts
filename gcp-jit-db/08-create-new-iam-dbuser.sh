@@ -48,24 +48,46 @@ fi
 
 # Step 1: Enable IAM Authentication on Cloud SQL Instance
 echo "Step 1: Enabling IAM Authentication on Cloud SQL Instance: $SQL_INSTANCE_NAME..."
+
+# Get existing database flags in JSON format
+echo "  Fetching existing database flags..."
+EXISTING_FLAGS_JSON=$(gcloud sql instances describe "$SQL_INSTANCE_NAME" \
+    --project="$DB_USER_PROJECT_ID" \
+    --format="json" | jq -r '.settings.databaseFlags // [] | map("\(.name)=\(.value)") | join(",")')
+
+# Build the IAM flag
 if [ "$DB_TYPE" == "postgresql" ]; then
-    gcloud sql instances patch "$SQL_INSTANCE_NAME" \
-        --project="$DB_USER_PROJECT_ID" \
-        --database-flags cloudsql.iam_authentication=on
-    if [ $? -ne 0 ]; then
-        echo "Error: Failed to enable IAM authentication on $SQL_INSTANCE_NAME"
-        exit 1
-    fi
+    IAM_FLAG_NAME="cloudsql.iam_authentication"
 elif [ "$DB_TYPE" == "mysql" ]; then
+    IAM_FLAG_NAME="cloudsql_iam_authentication"
+fi
+
+# Check if IAM flag already exists
+if echo "$EXISTING_FLAGS_JSON" | grep -q "${IAM_FLAG_NAME}=on"; then
+    echo "  ✓ IAM Authentication is already enabled on $SQL_INSTANCE_NAME"
+else
+    echo "  Current flags: $EXISTING_FLAGS_JSON"
+    echo "  Adding IAM authentication flag..."
+    
+    # Build new flags string
+    if [ -n "$EXISTING_FLAGS_JSON" ] && [ "$EXISTING_FLAGS_JSON" != "null" ]; then
+        NEW_FLAGS="${EXISTING_FLAGS_JSON},${IAM_FLAG_NAME}=on"
+    else
+        NEW_FLAGS="${IAM_FLAG_NAME}=on"
+    fi
+    
+    echo "  New flags to apply: $NEW_FLAGS"
+    
     gcloud sql instances patch "$SQL_INSTANCE_NAME" \
         --project="$DB_USER_PROJECT_ID" \
-        --database-flags cloudsql_iam_authentication=on
+        --database-flags "$NEW_FLAGS"
+    
     if [ $? -ne 0 ]; then
-        echo "Error: Failed to enable IAM authentication on $SQL_INSTANCE_NAME"
+        echo "  ✗ Error: Failed to enable IAM authentication on $SQL_INSTANCE_NAME"
         exit 1
     fi
+    echo "  ✓ IAM Authentication enabled successfully on $SQL_INSTANCE_NAME"
 fi
-echo "IAM Authentication enabled successfully on $SQL_INSTANCE_NAME."
 echo ""
 
 # Convert space-separated string to array
