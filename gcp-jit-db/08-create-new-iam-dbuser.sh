@@ -53,7 +53,17 @@ echo "Step 1: Enabling IAM Authentication on Cloud SQL Instance: $SQL_INSTANCE_N
 echo "  Fetching existing database flags..."
 EXISTING_FLAGS_JSON=$(gcloud sql instances describe "$SQL_INSTANCE_NAME" \
     --project="$DB_USER_PROJECT_ID" \
-    --format="json" | jq -r '.settings.databaseFlags // [] | map("\(.name)=\(.value)") | join(",")')
+    --format="json" 2>/dev/null | jq -r '.settings.databaseFlags // [] | map("\(.name)=\(.value)") | join(",")' 2>/dev/null)
+
+# Check if the command succeeded
+if [ ${PIPESTATUS[0]} -ne 0 ] || [ ${PIPESTATUS[1]} -ne 0 ]; then
+    echo "  ✗ Error: Failed to fetch database flags. Please check:"
+    echo "    - Instance name is correct"
+    echo "    - Project ID is correct"
+    echo "    - You have proper permissions"
+    echo "    - jq is installed"
+    exit 1
+fi
 
 # Build the IAM flag
 if [ "$DB_TYPE" == "postgresql" ]; then
@@ -63,15 +73,19 @@ elif [ "$DB_TYPE" == "mysql" ]; then
 fi
 
 # Check if IAM flag already exists
-if echo "$EXISTING_FLAGS_JSON" | grep -q "${IAM_FLAG_NAME}=on"; then
+if echo "$EXISTING_FLAGS_JSON" | grep -qE "(^|,)${IAM_FLAG_NAME}=on(,|$)"; then
     echo "  ✓ IAM Authentication is already enabled on $SQL_INSTANCE_NAME"
 else
     echo "  Current flags: $EXISTING_FLAGS_JSON"
     echo "  Adding IAM authentication flag..."
     
+    # Remove the IAM flag if it exists (regardless of value) to avoid duplicates
+    # This handles the case where the flag might be set to "off"
+    CLEANED_FLAGS=$(echo "$EXISTING_FLAGS_JSON" | sed -E "s/(^|,)${IAM_FLAG_NAME}=[^,]*(,|$)/\1/g" | sed 's/^,//;s/,$//')
+    
     # Build new flags string
-    if [ -n "$EXISTING_FLAGS_JSON" ] && [ "$EXISTING_FLAGS_JSON" != "null" ]; then
-        NEW_FLAGS="${EXISTING_FLAGS_JSON},${IAM_FLAG_NAME}=on"
+    if [ -n "$CLEANED_FLAGS" ] && [ "$CLEANED_FLAGS" != "null" ]; then
+        NEW_FLAGS="${CLEANED_FLAGS},${IAM_FLAG_NAME}=on"
     else
         NEW_FLAGS="${IAM_FLAG_NAME}=on"
     fi
