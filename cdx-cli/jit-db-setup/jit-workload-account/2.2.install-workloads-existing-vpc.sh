@@ -1505,4 +1505,30 @@ echo "  EFS: $EFS_ID"
 echo "  S3 Bucket: $BUCKET_NAME"
 echo "  DAM Enabled: $ENABLE_DAM"
 echo ""
-echo ""
+
+ENABLE_UPDATE_SERVICES=false
+if prompt_yes_no "Are you updating images in Cluster" "n"; then
+    ENABLE_UPDATE_SERVICES=true
+    echo "ECS will be updated"
+else
+    echo "ECS will not be updated"
+fi
+
+if [ "$ENABLE_UPDATE_SERVICES" = true ]; then
+    ECS_SERVICES=("proxysql" "query-logging" "proxyserver")
+
+    if [ "$ENABLE_DAM" = true ]; then
+        ECS_SERVICES+=("dam-server" "postgresql")
+    fi
+
+    for ECS_SERVICE in "${ECS_SERVICES[@]}"; do
+        echo "Updating ecs service: $ECS_SERVICE"
+        
+        aws ecs update-service --cluster "$ECS_CLUSTER_NAME" --service "$ECS_SERVICE" \
+            --force-new-deployment --region "$AWS_REGION" --output text > /dev/null
+        
+        sleep 10
+    done
+
+    echo "Services Updated for all ECS Services."
+fi
