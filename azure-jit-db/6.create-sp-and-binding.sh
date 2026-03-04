@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# 6.create-sp-and-binding.sh - FIXED VERSION
+# Handles cross-subscription databases
 set -o errexit
 set -o nounset
 set -o pipefail
@@ -23,17 +25,21 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 # Load JIT infrastructure config
 if [ ! -f ~/jit-infra.env ]; then
-  echo " ~/jit-infra.env not found. Run 2.setup-infra.sh first."
+  echo "[ERROR] ~/jit-infra.env not found. Run 2.setup-infra.sh first."
   exit 1
 fi
 
 source ~/jit-infra.env
+
+# Get current subscription
+CURRENT_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 
 echo ""
 echo "JIT Infrastructure:"
 echo "  Resource Group:     $RESOURCE_GROUP"
 echo "  Managed Identity:   $IDENTITY_NAME"
 echo "  Identity Client ID: $IDENTITY_CLIENT_ID"
+echo "  Subscription:       $CURRENT_SUBSCRIPTION_ID"
 
 # ── Step 1: Select Database Type ──────────────────────────
 echo ""
@@ -66,7 +72,7 @@ case $DB_TYPE_CHOICE in
     AAD_SCOPE="https://database.windows.net/.default"
     ;;
   *)
-    echo "Invalid choice"
+    echo "[ERROR] Invalid choice"
     exit 1
     ;;
 esac
@@ -77,6 +83,18 @@ echo "Selected: $DB_TYPE_NAME"
 echo ""
 read -p "Database server name: " DB_SERVER_NAME
 read -p "Database resource group: " DB_RESOURCE_GROUP
+read -p "Database subscription ID (if different) [$CURRENT_SUBSCRIPTION_ID]: " DB_SUBSCRIPTION_ID
+DB_SUBSCRIPTION_ID=${DB_SUBSCRIPTION_ID:-$CURRENT_SUBSCRIPTION_ID}
+
+# Check if cross-subscription
+CROSS_SUBSCRIPTION=false
+if [ "$DB_SUBSCRIPTION_ID" != "$CURRENT_SUBSCRIPTION_ID" ]; then
+  CROSS_SUBSCRIPTION=true
+  echo ""
+  echo "[INFO] Cross-subscription database detected"
+  echo "   Database subscription: $DB_SUBSCRIPTION_ID"
+  echo "   JIT subscription:      $CURRENT_SUBSCRIPTION_ID"
+fi
 
 # Get tenant ID
 TENANT_ID=$(az account show --query tenantId -o tsv)
@@ -93,24 +111,33 @@ echo "Checking database server..."
 # Build resource ID based on type
 case $DB_TYPE in
   postgresql)
-    DB_RESOURCE_ID="/subscriptions/$(az account show --query id -o tsv)/resourceGroups/${DB_RESOURCE_GROUP}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${DB_SERVER_NAME}"
+    DB_RESOURCE_ID="/subscriptions/${DB_SUBSCRIPTION_ID}/resourceGroups/${DB_RESOURCE_GROUP}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${DB_SERVER_NAME}"
     ;;
   mysql)
-    DB_RESOURCE_ID="/subscriptions/$(az account show --query id -o tsv)/resourceGroups/${DB_RESOURCE_GROUP}/providers/Microsoft.DBforMySQL/flexibleServers/${DB_SERVER_NAME}"
+    DB_RESOURCE_ID="/subscriptions/${DB_SUBSCRIPTION_ID}/resourceGroups/${DB_RESOURCE_GROUP}/providers/Microsoft.DBforMySQL/flexibleServers/${DB_SERVER_NAME}"
     ;;
   mssql)
-    DB_RESOURCE_ID="/subscriptions/$(az account show --query id -o tsv)/resourceGroups/${DB_RESOURCE_GROUP}/providers/Microsoft.Sql/servers/${DB_SERVER_NAME}"
+    DB_RESOURCE_ID="/subscriptions/${DB_SUBSCRIPTION_ID}/resourceGroups/${DB_RESOURCE_GROUP}/providers/Microsoft.Sql/servers/${DB_SERVER_NAME}"
     ;;
 esac
 
-# Verify database exists
+# Verify database exists (switch subscription if needed)
+if [ "$CROSS_SUBSCRIPTION" = true ]; then
+  echo "  Switching to database subscription to verify..."
+  az account set --subscription $DB_SUBSCRIPTION_ID
+fi
+
 DB_EXISTS=$(az resource show --ids $DB_RESOURCE_ID --query id -o tsv 2>/dev/null || echo "")
+
 if [ -z "$DB_EXISTS" ]; then
-  echo " Database server not found: $DB_SERVER_NAME"
+  echo "[ERROR] Database server not found: $DB_SERVER_NAME"
+  if [ "$CROSS_SUBSCRIPTION" = true ]; then
+    az account set --subscription $CURRENT_SUBSCRIPTION_ID
+  fi
   exit 1
 fi
 
-echo " Database server found"
+echo "[OK] Database server found"
 
 # ── Step 3: Check AAD Authentication Status ────────────────
 echo ""
@@ -129,9 +156,9 @@ case $DB_TYPE in
     
     if [ "$AUTH_CONFIG" = "Enabled" ]; then
       AAD_ENABLED=true
-      echo " Azure AD authentication is ENABLED"
+      echo "[OK] Azure AD authentication is ENABLED"
     else
-      echo "  Azure AD authentication is DISABLED"
+      echo "  [WARNING] Azure AD authentication is DISABLED"
     fi
     ;;
     
@@ -145,9 +172,9 @@ case $DB_TYPE in
     
     if [ -n "$AAD_ADMIN" ]; then
       AAD_ENABLED=true
-      echo " Azure AD authentication is ENABLED (admin: $AAD_ADMIN)"
+      echo "[OK] Azure AD authentication is ENABLED (admin: $AAD_ADMIN)"
     else
-      echo "  Azure AD authentication is DISABLED (no AAD admin set)"
+      echo "  [WARNING] Azure AD authentication is DISABLED (no AAD admin set)"
     fi
     ;;
     
@@ -159,9 +186,9 @@ case $DB_TYPE in
     
     if [ -n "$AAD_ADMIN" ]; then
       AAD_ENABLED=true
-      echo " Azure AD authentication is ENABLED (admin: $AAD_ADMIN)"
+      echo "[OK] Azure AD authentication is ENABLED (admin: $AAD_ADMIN)"
     else
-      echo "  Azure AD authentication is DISABLED (no AAD admin set)"
+      echo "  [WARNING] Azure AD authentication is DISABLED (no AAD admin set)"
     fi
     ;;
 esac
@@ -170,7 +197,7 @@ esac
 if [ "$AAD_ENABLED" = false ]; then
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "  Azure AD Authentication Required"
+  echo "[WARNING]  Azure AD Authentication Required"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
   echo "Azure AD authentication must be enabled on the database server."
@@ -194,6 +221,9 @@ if [ "$AAD_ENABLED" = false ]; then
   echo ""
   if ! prompt_yes_no "Enable Azure AD authentication now?" "y"; then
     echo "Setup cannot continue without AAD authentication."
+    if [ "$CROSS_SUBSCRIPTION" = true ]; then
+      az account set --subscription $CURRENT_SUBSCRIPTION_ID
+    fi
     exit 1
   fi
   
@@ -206,52 +236,72 @@ if [ "$AAD_ENABLED" = false ]; then
       CURRENT_USER_EMAIL=$(az ad signed-in-user show --query userPrincipalName -o tsv)
       CURRENT_USER_OID=$(az ad signed-in-user show --query id -o tsv)
       
-      # Step 1: Enable Entra ID authentication
-      echo "  Enabling Microsoft Entra ID authentication..."
+      # Step 1: Enable Active Directory authentication
+      echo "  Enabling Active Directory authentication..."
       az postgres flexible-server update \
         --resource-group $DB_RESOURCE_GROUP \
         --name $DB_SERVER_NAME \
-        --microsoft-entra-auth Enabled \
+        --active-directory-auth Enabled \
         --password-auth Enabled \
         --output none
       
-      # Step 2: Create Entra ID admin
-      echo "  Setting Entra ID admin: $CURRENT_USER_EMAIL"
-      az postgres flexible-server microsoft-entra-admin create \
+      # Step 2: Create AD admin
+      echo "  Setting AD admin: $CURRENT_USER_EMAIL"
+      az postgres flexible-server ad-admin create \
         --resource-group $DB_RESOURCE_GROUP \
         --server-name $DB_SERVER_NAME \
-        --display-name "$CURRENT_USER_EMAIL" \
         --object-id $CURRENT_USER_OID \
-        --type User \
+        --principal-name "$CURRENT_USER_EMAIL" \
+        --principal-type User \
         --output none
       
-      echo " Entra ID enabled with admin: $CURRENT_USER_EMAIL"
+      echo "[OK] Active Directory enabled with admin: $CURRENT_USER_EMAIL"
       ;;
     
     mysql)
       CURRENT_USER_EMAIL=$(az ad signed-in-user show --query userPrincipalName -o tsv)
       CURRENT_USER_OID=$(az ad signed-in-user show --query id -o tsv)
       
-      # Step 1: Enable Entra ID authentication
-      echo "  Enabling Microsoft Entra ID authentication..."
-      az mysql flexible-server update \
-        --resource-group $DB_RESOURCE_GROUP \
-        --name $DB_SERVER_NAME \
-        --microsoft-entra-auth Enabled \
-        --password-auth Enabled \
-        --output none
+      echo "  Setting Azure AD admin: $CURRENT_USER_EMAIL"
       
-      # Step 2: Create Entra ID admin
-      echo "  Setting Entra ID admin: $CURRENT_USER_EMAIL"
-      az mysql flexible-server microsoft-entra-admin create \
+      # Try approach 1: Create AAD admin directly (works with newer Azure CLI)
+      if az mysql flexible-server ad-admin create \
         --resource-group $DB_RESOURCE_GROUP \
         --server-name $DB_SERVER_NAME \
         --display-name "$CURRENT_USER_EMAIL" \
         --object-id $CURRENT_USER_OID \
-        --type User \
-        --output none
-      
-      echo " Entra ID enabled with admin: $CURRENT_USER_EMAIL"
+        --output none 2>/dev/null; then
+        
+        echo "[OK] Azure AD admin set: $CURRENT_USER_EMAIL"
+      else
+        # Approach 1 failed, try enabling server identity first
+        echo "  Enabling system-assigned identity on server..."
+        
+        if az mysql flexible-server update \
+          --resource-group $DB_RESOURCE_GROUP \
+          --name $DB_SERVER_NAME \
+          --identity \
+          --output none 2>/dev/null; then
+          
+          echo "  [OK] Identity enabled, retrying AAD admin creation..."
+          sleep 5
+          
+          # Retry AAD admin creation
+          az mysql flexible-server ad-admin create \
+            --resource-group $DB_RESOURCE_GROUP \
+            --server-name $DB_SERVER_NAME \
+            --display-name "$CURRENT_USER_EMAIL" \
+            --object-id $CURRENT_USER_OID \
+            --output none
+          
+          echo "[OK] Azure AD admin set: $CURRENT_USER_EMAIL"
+        else
+          echo "[ERROR] Could not enable identity or create AAD admin"
+          echo "Try manually:"
+          echo "  az mysql flexible-server update --name $DB_SERVER_NAME --resource-group $DB_RESOURCE_GROUP --identity"
+          echo "  az mysql flexible-server ad-admin create --server-name $DB_SERVER_NAME --display-name \"$CURRENT_USER_EMAIL\" --object-id $CURRENT_USER_OID"
+        fi
+      fi
       ;;
       
     mssql)
@@ -266,9 +316,17 @@ if [ "$AAD_ENABLED" = false ]; then
         --object-id $CURRENT_USER_OID \
         --output none
       
-      echo " Azure AD admin set: $CURRENT_USER_EMAIL"
+      echo "[OK] Azure AD admin set: $CURRENT_USER_EMAIL"
       ;;
   esac
+fi
+
+# Switch back to JIT subscription if cross-subscription
+if [ "$CROSS_SUBSCRIPTION" = true ]; then
+  echo ""
+  echo "Switching back to JIT subscription..."
+  az account set --subscription $CURRENT_SUBSCRIPTION_ID
+  echo "[OK] Back to JIT subscription"
 fi
 
 # ── Step 5: Create Service Principals ──────────────────────
@@ -338,7 +396,7 @@ for SP_NAME in "${SP_NAMES[@]}"; do
   SP_SECRETS[$SP_NAME]=$SP_SECRET
   SP_OBJECT_IDS[$SP_NAME]=$SP_OBJECT_ID
   
-  echo " Created SP: $SP_NAME"
+  echo "[OK] Created SP: $SP_NAME"
   echo "   App ID:    $SP_CLIENT_ID"
   echo "   Object ID: $SP_OBJECT_ID"
   
@@ -358,9 +416,9 @@ for SP_NAME in "${SP_NAMES[@]}"; do
       \"subject\": \"${IDENTITY_PRINCIPAL_ID}\",
       \"audiences\": [\"api://AzureADTokenExchange\"]
     }" \
-    --output none 2>/dev/null || echo "   (federated credential may already exist)"
+    --output none 2>/dev/null || echo "   [INFO] (federated credential may already exist)"
   
-  echo " Federated credential configured"
+  echo "[OK] Federated credential configured"
 done
 
 # ── Step 6: Database User Creation Commands ────────────────
@@ -370,16 +428,39 @@ echo "Database User Setup Required"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 echo ""
-echo "  MANUAL STEP: Create database users and grant permissions"
+echo "[WARNING]  MANUAL STEP: Create database users and grant permissions"
 echo ""
 echo "Connect to your database as an Entra ID admin and run the following SQL:"
 echo ""
 
+# Get DB FQDN
 case $DB_TYPE in
   postgresql)
-    echo "-- Connect as Entra ID admin:"
+    DB_FQDN="${DB_SERVER_NAME}.postgres.database.azure.com"
+    ;;
+  mysql)
+    DB_FQDN="${DB_SERVER_NAME}.mysql.database.azure.com"
+    ;;
+  mssql)
+    DB_FQDN="${DB_SERVER_NAME}.database.windows.net"
+    ;;
+esac
+
+case $DB_TYPE in
+  postgresql)
+    echo "# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "# PostgreSQL Setup"
+    echo "# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "# 1. Connect as Entra ID admin:"
     echo "export PGPASSWORD=\$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
-    echo "psql \"host=${DB_SERVER_NAME}.postgres.database.azure.com port=5432 dbname=postgres user=$(az ad signed-in-user show --query userPrincipalName -o tsv) sslmode=require password=\$PGPASSWORD\""
+    if [ "$CROSS_SUBSCRIPTION" = true ]; then
+      echo "# Note: If database is in different subscription, switch first:"
+      echo "# az account set --subscription $DB_SUBSCRIPTION_ID"
+    fi
+    echo "psql \"host=${DB_FQDN} port=5432 dbname=postgres user=$(az ad signed-in-user show --query userPrincipalName -o tsv) sslmode=require\""
+    echo ""
+    echo "# 2. Create users and grant permissions:"
     echo ""
     for SP_NAME in "${SP_NAMES[@]}"; do
       OBJECT_ID="${SP_OBJECT_IDS[$SP_NAME]}"
@@ -402,17 +483,30 @@ case $DB_TYPE in
     ;;
     
   mysql)
-    echo "-- Connect as AAD admin"
-    echo "-- mysql -h ${DB_SERVER_NAME}.mysql.database.azure.com -u <your-aad-admin> --enable-cleartext-plugin --password=\$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)"
+    echo "# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "# MySQL Setup"
+    echo "# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "# 1. Get access token:"
+    if [ "$CROSS_SUBSCRIPTION" = true ]; then
+      echo "# Note: If database is in different subscription, switch first:"
+      echo "# az account set --subscription $DB_SUBSCRIPTION_ID"
+    fi
+    echo "TOKEN=\$(az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)"
+    echo ""
+    echo "# 2. Connect as AAD admin:"
+    echo "mysql -h ${DB_FQDN} -u $(az ad signed-in-user show --query userPrincipalName -o tsv) --enable-cleartext-plugin --password=\"\$TOKEN\""
+    echo ""
+    echo "# 3. Create users and grant permissions:"
     echo ""
     for SP_NAME in "${SP_NAMES[@]}"; do
       echo "-- Create user: $SP_NAME"
       echo "CREATE AADUSER '${SP_NAME}';"
       echo ""
-      echo "-- Grant permissions (adjust as needed):"
-      echo "GRANT SELECT ON your_database.* TO '${SP_NAME}'@'%';"
+      echo "-- Grant permissions (adjust database name and privileges):"
+      echo "GRANT SELECT ON testdb.* TO '${SP_NAME}'@'%';"
       echo "-- For write access:"
-      echo "-- GRANT INSERT, UPDATE, DELETE ON your_database.* TO '${SP_NAME}'@'%';"
+      echo "-- GRANT INSERT, UPDATE, DELETE ON testdb.* TO '${SP_NAME}'@'%';"
       echo "FLUSH PRIVILEGES;"
       echo ""
       echo "---"
@@ -421,14 +515,24 @@ case $DB_TYPE in
     ;;
     
   mssql)
-    echo "-- Connect as AAD admin"
-    echo "-- sqlcmd -S ${DB_SERVER_NAME}.database.windows.net -d <your-db> -G -U <your-aad-admin>"
+    echo "# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "# Azure SQL Database Setup"
+    echo "# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "# 1. Connect as AAD admin:"
+    if [ "$CROSS_SUBSCRIPTION" = true ]; then
+      echo "# Note: If database is in different subscription, switch first:"
+      echo "# az account set --subscription $DB_SUBSCRIPTION_ID"
+    fi
+    echo "sqlcmd -S ${DB_FQDN} -d <your-db> -G -U $(az ad signed-in-user show --query userPrincipalName -o tsv)"
+    echo ""
+    echo "# 2. Create users and grant permissions:"
     echo ""
     for SP_NAME in "${SP_NAMES[@]}"; do
       echo "-- Create user: $SP_NAME"
       echo "CREATE USER [${SP_NAME}] FROM EXTERNAL PROVIDER;"
       echo ""
-      echo "-- Grant permissions (adjust as needed):"
+      echo "-- Grant permissions:"
       echo "ALTER ROLE db_datareader ADD MEMBER [${SP_NAME}];"
       echo "-- For write access:"
       echo "-- ALTER ROLE db_datawriter ADD MEMBER [${SP_NAME}];"
@@ -441,29 +545,71 @@ esac
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-for SP_NAME in "${SP_NAMES[@]}"; do
-  CLIENT_ID="${SP_CLIENT_IDS[$SP_NAME]}"
-  echo "# For service principal: $SP_NAME"
-  echo "---"
-  echo ""
-done
-
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Setup Complete!"
+echo "Service Principal Details"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "Service Principals Created: ${#SP_NAMES[@]}"
+
 for SP_NAME in "${SP_NAMES[@]}"; do
   CLIENT_ID="${SP_CLIENT_IDS[$SP_NAME]}"
   OBJECT_ID="${SP_OBJECT_IDS[$SP_NAME]}"
-  echo "   $SP_NAME"
-  echo "     App ID:    $CLIENT_ID"
-  echo "     Object ID: $OBJECT_ID"
+  echo "Service Principal: $SP_NAME"
+  echo "  App ID (Client ID): $CLIENT_ID"
+  echo "  Object ID:          $OBJECT_ID"
+  echo "  Tenant ID:          $TENANT_ID"
+  echo "  Scope:              $AAD_SCOPE"
+  echo ""
 done
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "[OK] Setup Complete!"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
+echo "Created: ${#SP_NAMES[@]} service principal(s)"
 echo "Federated Credentials: Configured for ACI managed identity"
-echo "Managed Identity:      $IDENTITY_NAME ($IDENTITY_CLIENT_ID)"
+echo "Managed Identity: $IDENTITY_NAME ($IDENTITY_CLIENT_ID)"
 echo ""
+if [ "$CROSS_SUBSCRIPTION" = true ]; then
+  echo "[WARNING]  Cross-subscription setup:"
+  echo "   JIT subscription:      $CURRENT_SUBSCRIPTION_ID"
+  echo "   Database subscription: $DB_SUBSCRIPTION_ID"
+  echo ""
+  echo "   When connecting to database, remember to switch subscriptions:"
+  echo "   az account set --subscription $DB_SUBSCRIPTION_ID"
+  echo ""
+fi
+echo "Next: Run the SQL commands above to create database users"
+echo ""
+
+# Save configuration
+cat > ~/sp-db-binding-${DB_SERVER_NAME}.env <<EOF
+# Service Principal Database Binding Configuration
+DB_TYPE=$DB_TYPE
+DB_SERVER_NAME=$DB_SERVER_NAME
+DB_RESOURCE_GROUP=$DB_RESOURCE_GROUP
+DB_SUBSCRIPTION_ID=$DB_SUBSCRIPTION_ID
+DB_FQDN=$DB_FQDN
+CROSS_SUBSCRIPTION=$CROSS_SUBSCRIPTION
+TENANT_ID=$TENANT_ID
+AAD_SCOPE=$AAD_SCOPE
+MANAGED_IDENTITY_NAME=$IDENTITY_NAME
+MANAGED_IDENTITY_CLIENT_ID=$IDENTITY_CLIENT_ID
+MANAGED_IDENTITY_PRINCIPAL_ID=$IDENTITY_PRINCIPAL_ID
+CREATED_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# Service Principals
+SP_COUNT=${#SP_NAMES[@]}
+EOF
+
+# Add SP details to file
+i=1
+for SP_NAME in "${SP_NAMES[@]}"; do
+  cat >> ~/sp-db-binding-${DB_SERVER_NAME}.env <<EOF
+SP${i}_NAME=$SP_NAME
+SP${i}_CLIENT_ID=${SP_CLIENT_IDS[$SP_NAME]}
+SP${i}_OBJECT_ID=${SP_OBJECT_IDS[$SP_NAME]}
+EOF
+  ((i++))
+done
+
+echo "[SAVED] Configuration saved to: ~/sp-db-binding-${DB_SERVER_NAME}.env"
 echo ""

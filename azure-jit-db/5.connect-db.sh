@@ -30,20 +30,22 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 # Load JIT infrastructure config
 if [ ! -f ~/jit-infra.env ]; then
-  echo " ~/jit-infra.env not found. Run 03-setup-infrastructure.sh first."
+  echo "
+ ~/jit-infra.env not found. Run 03-setup-infrastructure.sh first."
   exit 1
 fi
 
 source ~/jit-infra.env
 
 # Get current subscription ID
-SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+CURRENT_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 
 echo ""
 echo "JIT Infrastructure:"
 echo "  Resource Group: $RESOURCE_GROUP"
 echo "  VNet:           $VNET_NAME"
 echo "  Location:       $LOCATION"
+echo "  Subscription:   $CURRENT_SUBSCRIPTION_ID"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -76,7 +78,8 @@ case $DB_TYPE_CHOICE in
     GROUP_ID="mysqlServer"
     ;;
   *)
-    echo "Invalid choice"
+    echo "
+ Invalid choice"
     exit 1
     ;;
 esac
@@ -87,8 +90,8 @@ echo "Selected: $DB_TYPE_NAME"
 echo ""
 read -p "Database server name: " DB_SERVER_NAME
 read -p "Database resource group: " DB_RESOURCE_GROUP
-read -p "Database subscription ID (if different) [$SUBSCRIPTION_ID]: " DB_SUBSCRIPTION_ID
-DB_SUBSCRIPTION_ID=${DB_SUBSCRIPTION_ID:-$(az account show --query id -o tsv)}
+read -p "Database subscription ID (if different) [$CURRENT_SUBSCRIPTION_ID]: " DB_SUBSCRIPTION_ID
+DB_SUBSCRIPTION_ID=${DB_SUBSCRIPTION_ID:-$CURRENT_SUBSCRIPTION_ID}
 
 # Build database resource ID
 case $DB_TYPE in
@@ -107,23 +110,121 @@ echo ""
 echo "Database Resource ID:"
 echo "  $DB_RESOURCE_ID"
 
+# Check if cross-subscription
+CROSS_SUBSCRIPTION=false
+if [ "$DB_SUBSCRIPTION_ID" != "$CURRENT_SUBSCRIPTION_ID" ]; then
+  CROSS_SUBSCRIPTION=true
+  echo ""
+  echo " Cross-subscription private endpoint detected"
+  echo "   Database subscription: $DB_SUBSCRIPTION_ID"
+  echo "   JIT subscription:      $CURRENT_SUBSCRIPTION_ID"
+fi
+
 # Verify database exists and get location
 echo ""
 echo "Verifying database..."
+
+# If cross-subscription, temporarily switch to DB subscription to verify
+if [ "$CROSS_SUBSCRIPTION" = true ]; then
+  az account set --subscription $DB_SUBSCRIPTION_ID
+fi
+
 DB_LOCATION=$(az resource show \
   --ids $DB_RESOURCE_ID \
-  --query location -o tsv)
+  --query location -o tsv 2>/dev/null || echo "")
 
 if [ -z "$DB_LOCATION" ]; then
   echo " Database not found or no access"
+  if [ "$CROSS_SUBSCRIPTION" = true ]; then
+    az account set --subscription $CURRENT_SUBSCRIPTION_ID
+  fi
   exit 1
 fi
 
-echo " Database found in region: $DB_LOCATION"
+echo "Database found in region: $DB_LOCATION"
 
 if [ "$DB_LOCATION" != "$LOCATION" ]; then
-  echo "  Database is in different region than JIT infrastructure"
-  echo "   This is supported but may have higher latency"
+  echo "    Database is in different region than JIT infrastructure"
+  echo "     This is supported but may have higher latency"
+fi
+
+# Handle cross-subscription Microsoft.Network registration
+if [ "$CROSS_SUBSCRIPTION" = true ]; then
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "Cross-Subscription Setup"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  echo "Checking Microsoft.Network provider in database subscription..."
+  
+  # Check if Microsoft.Network is registered in DB subscription
+  NETWORK_STATUS=$(az provider show \
+    --namespace Microsoft.Network \
+    --subscription $DB_SUBSCRIPTION_ID \
+    --query registrationState -o tsv 2>/dev/null || echo "NotRegistered")
+  
+  echo "  Current status: $NETWORK_STATUS"
+  
+  if [ "$NETWORK_STATUS" != "Registered" ]; then
+    echo ""
+    echo "  Microsoft.Network provider is not registered in database subscription"
+    echo "   This is required for cross-subscription private endpoints"
+    echo ""
+    
+    if prompt_yes_no "Register Microsoft.Network provider now? (takes 2-5 minutes)" "y"; then
+      echo ""
+      echo "⏳ Registering Microsoft.Network provider..."
+      echo "   This may take 2-5 minutes..."
+      echo ""
+      
+      az provider register \
+        --namespace Microsoft.Network \
+        --subscription $DB_SUBSCRIPTION_ID \
+        --wait
+      
+      # Verify registration
+      FINAL_STATUS=$(az provider show \
+        --namespace Microsoft.Network \
+        --subscription $DB_SUBSCRIPTION_ID \
+        --query registrationState -o tsv)
+      
+      if [ "$FINAL_STATUS" == "Registered" ]; then
+        echo "Microsoft.Network provider registered successfully!"
+      else
+        echo " Registration failed or still in progress (status: $FINAL_STATUS)"
+        echo ""
+        echo "Wait a few minutes and try again, or register manually:"
+        echo "  az account set --subscription $DB_SUBSCRIPTION_ID"
+        echo "  az provider register --namespace Microsoft.Network --wait"
+        echo "  az account set --subscription $CURRENT_SUBSCRIPTION_ID"
+        echo ""
+        az account set --subscription $CURRENT_SUBSCRIPTION_ID
+        exit 1
+      fi
+    else
+      echo ""
+      echo "
+ Cannot proceed without Microsoft.Network provider"
+      echo ""
+      echo "To register manually, run:"
+      echo "  az account set --subscription $DB_SUBSCRIPTION_ID"
+      echo "  az provider register --namespace Microsoft.Network --wait"
+      echo "  az account set --subscription $CURRENT_SUBSCRIPTION_ID"
+      echo ""
+      echo "Then re-run this script."
+      echo ""
+      az account set --subscription $CURRENT_SUBSCRIPTION_ID
+      exit 1
+    fi
+  else
+    echo "  Microsoft.Network provider already registered"
+  fi
+  
+  # Switch back to JIT subscription
+  echo ""
+  echo "Switching back to JIT subscription..."
+  az account set --subscription $CURRENT_SUBSCRIPTION_ID
+  echo "Ready to create private endpoint"
 fi
 
 echo ""
@@ -137,8 +238,10 @@ PE_CONNECTION="${DB_SERVER_NAME}-jit-connection"
 echo ""
 echo "Private endpoint name: $PE_NAME"
 echo "Creating in subnet: private-endpoint-subnet"
+echo ""
 
-az network private-endpoint create \
+# Create private endpoint
+if az network private-endpoint create \
   --resource-group $RESOURCE_GROUP \
   --name $PE_NAME \
   --vnet-name $VNET_NAME \
@@ -147,15 +250,29 @@ az network private-endpoint create \
   --group-id $GROUP_ID \
   --connection-name $PE_CONNECTION \
   --location $LOCATION \
-  --output none
+  --output none 2>&1; then
+  
+  echo "Private endpoint created successfully"
+else
+  echo ""
+  echo "
+ Private endpoint creation failed"
+  echo ""
+  echo "Common issues:"
+  echo "  1. Check if Microsoft.Network is registered in both subscriptions"
+  echo "  2. Verify you have permissions in both subscriptions"
+  echo "  3. Ensure database allows private endpoints"
+  echo ""
+  exit 1
+fi
 
+# Get private IP
 DB_PRIVATE_IP=$(az network private-endpoint show \
   --resource-group $RESOURCE_GROUP \
   --name $PE_NAME \
   --query "customDnsConfigs[0].ipAddresses[0]" \
   --output tsv)
 
-echo " Private endpoint created"
 echo "   Private IP: $DB_PRIVATE_IP"
 
 echo ""
@@ -180,19 +297,27 @@ echo ""
 echo "DNS Zone: $DNS_ZONE"
 
 # Create private DNS zone
-az network private-dns zone create \
+if az network private-dns zone create \
   --resource-group $RESOURCE_GROUP \
   --name $DNS_ZONE \
-  --output none 2>/dev/null || echo "  DNS zone already exists"
+  --output none 2>/dev/null; then
+  echo "  DNS zone created"
+else
+  echo "    DNS zone already exists"
+fi
 
 # Link to VNet
-az network private-dns link vnet create \
+if az network private-dns link vnet create \
   --resource-group $RESOURCE_GROUP \
   --zone-name $DNS_ZONE \
   --name "${DB_SERVER_NAME}-dns-link" \
   --virtual-network $VNET_NAME \
   --registration-enabled false \
-  --output none 2>/dev/null || echo "  VNet link already exists"
+  --output none 2>/dev/null; then
+  echo "  VNet linked to DNS zone"
+else
+  echo "    VNet link already exists"
+fi
 
 # Create DNS A record
 az network private-dns record-set a create \
@@ -208,8 +333,8 @@ az network private-dns record-set a add-record \
   --ipv4-address $DB_PRIVATE_IP \
   --output none
 
-echo " Private DNS configured"
-echo "   FQDN: ${DB_SERVER_NAME}.${DNS_ZONE} → $DB_PRIVATE_IP"
+echo "  DNS A record created"
+echo "     FQDN: ${DB_SERVER_NAME}.${DNS_ZONE} → $DB_PRIVATE_IP"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -231,23 +356,26 @@ esac
 
 echo ""
 echo "Testing DNS resolution and port connectivity..."
+echo ""
 
 TEST_SCRIPT=$(cat <<TESTEOF
 #!/bin/bash
-echo "Resolving ${DB_SERVER_NAME}.${DNS_ZONE}..."
+echo "=== DNS Resolution ==="
 nslookup ${DB_SERVER_NAME}.${DNS_ZONE} || true
 echo ""
-echo "Testing port ${DB_PORT} connectivity..."
+echo "=== Port ${DB_PORT} Connectivity ==="
 nc -zv -w5 ${DB_SERVER_NAME}.${DNS_ZONE} ${DB_PORT} 2>&1 || true
 TESTEOF
 )
 
-az vm run-command invoke \
+CONNECTIVITY_RESULT=$(az vm run-command invoke \
   --resource-group $RESOURCE_GROUP \
   --name $JUMPBOX_VM_NAME \
   --command-id RunShellScript \
   --scripts "$TEST_SCRIPT" \
-  --query "value[0].message" -o tsv
+  --query "value[0].message" -o tsv 2>/dev/null || echo "Failed to test")
+
+echo "$CONNECTIVITY_RESULT"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -259,4 +387,49 @@ echo "Private IP:        $DB_PRIVATE_IP"
 echo "DNS Zone:          $DNS_ZONE"
 echo "FQDN:              ${DB_SERVER_NAME}.${DNS_ZONE}"
 echo "Port:              $DB_PORT"
+echo ""
+
+if [ "$CROSS_SUBSCRIPTION" = true ]; then
+  echo "Cross-subscription private endpoint created successfully!"
+  echo ""
+  echo "Subscriptions involved:"
+  echo "  JIT (PE):      $CURRENT_SUBSCRIPTION_ID"
+  echo "  Database:      $DB_SUBSCRIPTION_ID"
+  echo ""
+fi
+
+echo "Next steps:"
+echo "  1. Configure database firewall to allow private endpoint"
+echo "  2. Disable public access on database (recommended)"
+echo "  3. Test connection from jump box:"
+echo ""
+case $DB_TYPE in
+  mysql)
+    echo "     mysql -h ${DB_SERVER_NAME}.${DNS_ZONE} -u admin -p"
+    ;;
+  postgresql)
+    echo "     psql -h ${DB_SERVER_NAME}.${DNS_ZONE} -U admin -d postgres"
+    ;;
+  sql)
+    echo "     sqlcmd -S ${DB_SERVER_NAME}.${DNS_ZONE} -U admin"
+    ;;
+esac
+echo ""
+
+# Save connection details
+cat > ~/db-connection-${DB_SERVER_NAME}.env <<EOF
+# Database Connection Details
+DB_TYPE=$DB_TYPE
+DB_SERVER_NAME=$DB_SERVER_NAME
+DB_RESOURCE_GROUP=$DB_RESOURCE_GROUP
+DB_SUBSCRIPTION_ID=$DB_SUBSCRIPTION_ID
+DB_PRIVATE_IP=$DB_PRIVATE_IP
+DB_FQDN=${DB_SERVER_NAME}.${DNS_ZONE}
+DB_PORT=$DB_PORT
+PE_NAME=$PE_NAME
+CROSS_SUBSCRIPTION=$CROSS_SUBSCRIPTION
+CREATED_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+EOF
+
+echo "📝 Connection details saved to: ~/db-connection-${DB_SERVER_NAME}.env"
 echo ""
