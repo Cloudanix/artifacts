@@ -200,16 +200,83 @@ az network nsg create \
   --location $LOCATION \
   --output none
 
+# Get allowed IPs for SSH
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "SSH Access Configuration"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "For security, SSH access should be restricted to specific IPs."
+echo ""
+read -p "Do you have a VPN IP/CIDR to whitelist? (y/n): " HAS_VPN
+
+ALLOWED_IPS=()
+
+if [ "$HAS_VPN" = "y" ]; then
+  read -p "Enter VPN IP or CIDR block (e.g., 203.0.113.0/24): " VPN_IP
+  ALLOWED_IPS+=("$VPN_IP")
+  echo "  Added VPN: $VPN_IP"
+else
+  echo ""
+  echo "Getting your current public IP..."
+  MY_IP=$(curl -s ifconfig.me || curl -s icanhazip.com || curl -s ipinfo.io/ip)
+  
+  if [ -n "$MY_IP" ]; then
+    echo "  Your IP: $MY_IP"
+    read -p "Whitelist your current IP ($MY_IP/32)? (y/n) [y]: " WHITELIST_ME
+    WHITELIST_ME=${WHITELIST_ME:-y}
+    
+    if [ "$WHITELIST_ME" = "y" ]; then
+      ALLOWED_IPS+=("${MY_IP}/32")
+      echo "  Added: ${MY_IP}/32"
+    fi
+  else
+    echo "  Could not detect your IP"
+  fi
+fi
+
+echo ""
+read -p "Add additional IPs? (y/n) [n]: " ADD_MORE
+ADD_MORE=${ADD_MORE:-n}
+
+while [ "$ADD_MORE" = "y" ]; do
+  read -p "Enter IP or CIDR: " EXTRA_IP
+  ALLOWED_IPS+=("$EXTRA_IP")
+  echo "  Added: $EXTRA_IP"
+  read -p "Add another? (y/n) [n]: " ADD_MORE
+  ADD_MORE=${ADD_MORE:-n}
+done
+
+# Create NSG rule with allowed IPs
+if [ ${#ALLOWED_IPS[@]} -eq 0 ]; then
+  echo ""
+  echo "  WARNING: No IPs specified. Creating rule with 0.0.0.0/0 (open to internet)"
+  read -p "Continue? (y/n): " CONFIRM
+  if [ "$CONFIRM" != "y" ]; then
+    echo "Aborting setup"
+    exit 1
+  fi
+  ALLOWED_IPS=("*")
+fi
+
+echo ""
+echo "Creating NSG rule with allowed sources:"
+for IP in "${ALLOWED_IPS[@]}"; do
+  echo "  $IP"
+done
+
 az network nsg rule create \
   --resource-group $RESOURCE_GROUP \
   --nsg-name jumpbox-nsg \
   --name AllowSSH \
   --priority 1000 \
-  --source-address-prefixes '*' \
+  --source-address-prefixes "${ALLOWED_IPS[@]}" \
   --destination-port-ranges 22 \
   --protocol Tcp \
   --access Allow \
   --output none
+
+echo "  SSH access restricted to specified IPs"
 
 # Associate NSG with subnet
 az network vnet subnet update \
