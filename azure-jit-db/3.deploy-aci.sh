@@ -87,6 +87,8 @@ for svc in postgresql proxysql proxyserver query-logging dam-server; do
 done
 wait
 
+DAM_IP='10.0.6.8'
+
 echo "Waiting 90s for subnet IPs to release..."
 sleep 90
 echo " All deleted"
@@ -110,6 +112,7 @@ az container create \
     AZURE_KEYVAULT_URL=$KV_URL \
     POSTGRES_DB=jitdb \
     POSTGRES_USER=pgjitdbuser \
+    DAM_SERVER_HOST=$DAM_IP \
   --location $LOCATION \
   --restart-policy Always \
   --assign-identity $IDENTITY_ID \
@@ -171,6 +174,7 @@ az container create \
     AZURE_KEYVAULT_URL=$KV_URL \
     POSTGRESQL_HOST=$PG_IP \
     PROXYSQL_HOST=$PROXYSQL_IP \
+    DAM_SERVER_HOST=$DAM_IP \
   --azure-file-volume-account-name $SMB_STORAGE_NAME \
   --azure-file-volume-account-key $SMB_KEY \
   --azure-file-volume-share-name proxysql-data \
@@ -237,7 +241,8 @@ az container create \
     AZURE_KEYVAULT_URL=$KV_URL \
     POSTGRESQL_HOST=$PG_IP \
     PROXYSQL_HOST=$PROXYSQL_IP \
-    DAM_SERVER_HOST=$PROXYSERVER_IP \
+    PROXYSERVER_HOST=$PROXYSERVER_IP \
+    DAM_SERVER_HOST=$DAM_IP \
   --azure-file-volume-account-name $SMB_STORAGE_NAME \
   --azure-file-volume-account-key $SMB_KEY \
   --azure-file-volume-share-name proxysql-data \
