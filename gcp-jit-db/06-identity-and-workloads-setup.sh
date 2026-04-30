@@ -280,7 +280,11 @@ spec:
       initContainers:
       - name: fix-permissions
         image: busybox
-        command: ["sh", "-c", "chown -R 1000:1000 /var/lib/proxysql"]
+        command:
+          - sh
+          - -c
+          - |
+            chown -R 1000:1000 /var/lib/proxysql || true
         volumeMounts:
         - name: proxysql-data
           mountPath: /var/lib/proxysql
@@ -551,6 +555,15 @@ spec:
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
+        env:
+        - name: PROXYSERVER_HOST
+          value: "proxyserver"
+        - name: PROXYSERVER_PORT
+          value: "8079"
+        - name: DAM_SERVER_HOST
+          value: "dam-server"
+        - name: DAM_SERVER_PORT
+          value: "8080"
         command:
           - sh
           - -c
