@@ -66,19 +66,35 @@ EOF
 )
 
 # Create the policies in IAM
-RDS_CONNECT_POLICY_ARN=$(aws iam create-policy \
-    --policy-name cdx-RDSConnectPolicy \
-    --policy-document "$RDS_CONNECT_POLICY" \
-    --description "Policy for RDS IAM authentication connection" \
-    --query 'Policy.Arn' \
-    --output text)
+EXISTING_RDS_CONNECT_POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='cdx-RDSConnectPolicy'].Arn | [0]" --output text 2>/dev/null)
 
-RDS_AUTH_TOKEN_POLICY_ARN=$(aws iam create-policy \
-    --policy-name cdx-RDSAuthTokenGenerationPolicy \
-    --policy-document "$RDS_AUTH_TOKEN_POLICY" \
-    --description "Policy for generating RDS auth tokens" \
-    --query 'Policy.Arn' \
-    --output text)
+if [ "$EXISTING_RDS_CONNECT_POLICY_ARN" != "None" ] && [ -n "$EXISTING_RDS_CONNECT_POLICY_ARN" ]; then
+    log "Policy cdx-RDSConnectPolicy already exists, skipping creation."
+    RDS_CONNECT_POLICY_ARN="$EXISTING_RDS_CONNECT_POLICY_ARN"
+else
+    log "Creating cdx-RDSConnectPolicy..."
+    RDS_CONNECT_POLICY_ARN=$(aws iam create-policy \
+        --policy-name cdx-RDSConnectPolicy \
+        --policy-document "$RDS_CONNECT_POLICY" \
+        --description "Policy for RDS IAM authentication connection" \
+        --query 'Policy.Arn' \
+        --output text)
+fi
+
+EXISTING_RDS_AUTH_TOKEN_POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='cdx-RDSAuthTokenGenerationPolicy'].Arn | [0]" --output text 2>/dev/null)
+
+if [ "$EXISTING_RDS_AUTH_TOKEN_POLICY_ARN" != "None" ] && [ -n "$EXISTING_RDS_AUTH_TOKEN_POLICY_ARN" ]; then
+    log "Policy cdx-RDSAuthTokenGenerationPolicy already exists, skipping creation."
+    RDS_AUTH_TOKEN_POLICY_ARN="$EXISTING_RDS_AUTH_TOKEN_POLICY_ARN"
+else
+    log "Creating cdx-RDSAuthTokenGenerationPolicy..."
+    RDS_AUTH_TOKEN_POLICY_ARN=$(aws iam create-policy \
+        --policy-name cdx-RDSAuthTokenGenerationPolicy \
+        --policy-document "$RDS_AUTH_TOKEN_POLICY" \
+        --description "Policy for generating RDS auth tokens" \
+        --query 'Policy.Arn' \
+        --output text)
+fi
 
 # Attach policies to roles
 for ROLE_NAME in "${ROLES[@]}"; do
