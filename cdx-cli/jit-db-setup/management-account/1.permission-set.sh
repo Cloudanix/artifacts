@@ -25,7 +25,7 @@ JIT_REGION=$(prompt_with_default "Enter JIT Account Region" "ap-south-1")
 JIT_CLUSTER_NAME=$(prompt_with_default "Enter JIT ECS Cluster Name" "cdx-jit-db-cluster")
 
 # Session Duration (default 8 hours)
-SESSION_DURATION=$(prompt_with_default "Enter Session Duration (format PT#H)" "PT8H")
+SESSION_DURATION="PT8H"
 
 # Create dynamic policy with user-specified cluster
 cat << EOF > permission-set-policy.json
