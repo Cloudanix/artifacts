@@ -65,12 +65,12 @@ RDS_AUTH_TOKEN_POLICY=$(cat <<EOF
 EOF
 )
 
-# Create the policies in IAM
-EXISTING_RDS_CONNECT_POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='cdx-RDSConnectPolicy'].Arn | [0]" --output text 2>/dev/null)
+# Create the policies in IAM (skip if they already exist)
+RDS_CONNECT_POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/cdx-RDSConnectPolicy"
+RDS_AUTH_TOKEN_POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/cdx-RDSAuthTokenGenerationPolicy"
 
-if [ "$EXISTING_RDS_CONNECT_POLICY_ARN" != "None" ] && [ -n "$EXISTING_RDS_CONNECT_POLICY_ARN" ]; then
+if aws iam get-policy --policy-arn "$RDS_CONNECT_POLICY_ARN" >/dev/null 2>&1; then
     log "Policy cdx-RDSConnectPolicy already exists, skipping creation."
-    RDS_CONNECT_POLICY_ARN="$EXISTING_RDS_CONNECT_POLICY_ARN"
 else
     log "Creating cdx-RDSConnectPolicy..."
     RDS_CONNECT_POLICY_ARN=$(aws iam create-policy \
@@ -81,11 +81,8 @@ else
         --output text)
 fi
 
-EXISTING_RDS_AUTH_TOKEN_POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='cdx-RDSAuthTokenGenerationPolicy'].Arn | [0]" --output text 2>/dev/null)
-
-if [ "$EXISTING_RDS_AUTH_TOKEN_POLICY_ARN" != "None" ] && [ -n "$EXISTING_RDS_AUTH_TOKEN_POLICY_ARN" ]; then
+if aws iam get-policy --policy-arn "$RDS_AUTH_TOKEN_POLICY_ARN" >/dev/null 2>&1; then
     log "Policy cdx-RDSAuthTokenGenerationPolicy already exists, skipping creation."
-    RDS_AUTH_TOKEN_POLICY_ARN="$EXISTING_RDS_AUTH_TOKEN_POLICY_ARN"
 else
     log "Creating cdx-RDSAuthTokenGenerationPolicy..."
     RDS_AUTH_TOKEN_POLICY_ARN=$(aws iam create-policy \
