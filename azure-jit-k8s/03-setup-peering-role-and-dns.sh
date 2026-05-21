@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-###############################################################################
+
 # Prompt for inputs (with defaults)
-###############################################################################
+
 echo "=== Hub VNet Details (where the jump VM lives) ==="
 read -rp "Hub Subscription ID []: " INPUT_HUB_SUB
 HUB_SUB="${INPUT_HUB_SUB}"
@@ -53,9 +53,9 @@ PEER_AKS_TO_HUB="${INPUT_PEER_AKS_TO_HUB:-peer-aks-to-hub}"
 read -rp "DNS link name [link-aks-dns-to-hub]: " INPUT_DNS_LINK_NAME
 DNS_LINK_NAME="${INPUT_DNS_LINK_NAME:-link-aks-dns-to-hub}"
 
-###############################################################################
+
 # Determine if cross-subscription
-###############################################################################
+
 CROSS_SUB=false
 if [[ "$HUB_SUB" != "$AKS_SUB" ]]; then
   CROSS_SUB=true
@@ -64,10 +64,10 @@ if [[ "$HUB_SUB" != "$AKS_SUB" ]]; then
   echo "      Ensure you have Network Contributor on both subscriptions."
 fi
 
-###############################################################################
+
 # Ensure CDX K8s Read Access role covers AKS subscription
 # (Role names are unique per tenant, so we add AKS sub to AssignableScopes)
-###############################################################################
+
 echo ""
 echo "=== Checking 'CDX K8s Read Access' role covers AKS subscription ==="
 az account set --subscription "$HUB_SUB"
@@ -98,9 +98,9 @@ else
   echo "AssignableScopes updated to include AKS subscription."
 fi
 
-###############################################################################
+
 # Get VNet resource IDs
-###############################################################################
+
 echo ""
 echo "=== Fetching VNet resource IDs ==="
 
@@ -118,9 +118,9 @@ AKS_VNET_ID=$(az network vnet show \
   --query id -o tsv)
 echo "AKS VNet ID: $AKS_VNET_ID"
 
-###############################################################################
+
 # Create VNet Peering: Hub -> AKS
-###############################################################################
+
 echo ""
 echo "=== Creating peering: $PEER_HUB_TO_AKS (hub -> aks) ==="
 az account set --subscription "$HUB_SUB"
@@ -143,9 +143,9 @@ else
   echo "Created."
 fi
 
-###############################################################################
+
 # Create VNet Peering: AKS -> Hub
-###############################################################################
+
 echo ""
 echo "=== Creating peering: $PEER_AKS_TO_HUB (aks -> hub) ==="
 az account set --subscription "$AKS_SUB"
@@ -167,9 +167,9 @@ else
   echo "Created."
 fi
 
-###############################################################################
+
 # Verify peering status
-###############################################################################
+
 echo ""
 echo "=== Verifying peering status ==="
 
@@ -191,11 +191,11 @@ az network vnet peering show \
   --query "{Name:name, State:peeringState}" \
   -o table
 
-###############################################################################
+
 # Private DNS Zone Link
 # Link the AKS private DNS zone to the hub VNet so the jump VM can resolve
 # the AKS private API server FQDN.
-###############################################################################
+
 echo ""
 echo "=== Setting up Private DNS Zone Link ==="
 
@@ -235,9 +235,9 @@ else
   echo "DNS link created."
 fi
 
-###############################################################################
+
 # Summary
-###############################################################################
+
 echo ""
 echo "=== Done ==="
 echo ""
