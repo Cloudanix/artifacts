@@ -154,11 +154,16 @@ else
     echo "$EXISTING_POLICY" > existing-policy.json
 
     # Merge: add new statements, replacing any with the same Sid
+    # Also fix malformed SSM ARNs (arn:aws:ssm:::resource -> arn:aws:ssm:*:*:resource)
     jq --slurpfile new_stmts new-statements.json '
         # Collect Sids from new statements
         ($new_stmts[0] | map(.Sid)) as $new_sids |
         # Keep existing statements whose Sid is NOT in the new set
-        .Statement = ([.Statement[] | select(.Sid as $s | $new_sids | index($s) | not)] + $new_stmts[0])
+        .Statement = ([.Statement[] | select(.Sid as $s | $new_sids | index($s) | not)] + $new_stmts[0]) |
+        # Fix malformed SSM ARNs that have empty region/account (:::)
+        .Statement = [.Statement[] | .Resource = [.Resource[] |
+            gsub("arn:aws:ssm:::"; "arn:aws:ssm:*:*:")
+        ]]
     ' existing-policy.json > permission-set-policy.json
 
     rm -f existing-policy.json
