@@ -26,12 +26,14 @@ JIT_CLUSTER_NAME=$(prompt_with_default "Enter JIT ECS Cluster Name" "cdx-jit-db-
 
 # Session Duration (default 8 hours)
 SESSION_DURATION="PT8H"
+SID_ACCOUNT_ID=$(echo "${JIT_ACCOUNT_ID}" | tr -cd '[:alnum:]')
+SID_CLUSTER_NAME=$(echo "${JIT_CLUSTER_NAME}" | tr -cd '[:alnum:]')
 
 # Build the new statements for this run
 cat << EOF > new-statements.json
 [
     {
-        "Sid": "SSMSessionAndCommandPolicy-${JIT_ACCOUNT_ID}-${JIT_CLUSTER_NAME}",
+        "Sid": "SSMSessionAndCommandPolicy${SID_ACCOUNT_ID}${SID_CLUSTER_NAME}",
         "Effect": "Allow",
         "Action": [
             "ssm:StartSession",
@@ -48,7 +50,7 @@ cat << EOF > new-statements.json
         ]
     },
     {
-        "Sid": "ECSDescribeAndListTasksServices-${JIT_ACCOUNT_ID}-${JIT_CLUSTER_NAME}",
+        "Sid": "ECSDescribeAndListTasksServices${SID_ACCOUNT_ID}${SID_CLUSTER_NAME}",
         "Effect": "Allow",
         "Action": [
             "ecs:DescribeTasks",
@@ -154,16 +156,11 @@ else
     echo "$EXISTING_POLICY" > existing-policy.json
 
     # Merge: add new statements, replacing any with the same Sid
-    # Also fix malformed SSM ARNs (arn:aws:ssm:::resource -> arn:aws:ssm:*:*:resource)
     jq --slurpfile new_stmts new-statements.json '
         # Collect Sids from new statements
         ($new_stmts[0] | map(.Sid)) as $new_sids |
         # Keep existing statements whose Sid is NOT in the new set
-        .Statement = ([.Statement[] | select(.Sid as $s | $new_sids | index($s) | not)] + $new_stmts[0]) |
-        # Fix malformed SSM ARNs that have empty region/account (:::)
-        .Statement = [.Statement[] | .Resource = [.Resource[] |
-            gsub("arn:aws:ssm:::"; "arn:aws:ssm:*:*:")
-        ]]
+        .Statement = ([.Statement[] | select(.Sid as $s | $new_sids | index($s) | not)] + $new_stmts[0])
     ' existing-policy.json > permission-set-policy.json
 
     rm -f existing-policy.json
