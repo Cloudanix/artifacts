@@ -26,12 +26,14 @@ JIT_CLUSTER_NAME=$(prompt_with_default "Enter JIT ECS Cluster Name" "cdx-jit-db-
 
 # Session Duration (default 8 hours)
 SESSION_DURATION="PT8H"
+SID_ACCOUNT_ID=$(echo "${JIT_ACCOUNT_ID}" | tr -cd '[:alnum:]')
+SID_CLUSTER_NAME=$(echo "${JIT_CLUSTER_NAME}" | tr -cd '[:alnum:]')
 
 # Build the new statements for this run
 cat << EOF > new-statements.json
 [
     {
-        "Sid": "SSMSessionAndCommandPolicy-${JIT_ACCOUNT_ID}-${JIT_CLUSTER_NAME}",
+        "Sid": "SSMSessionAndCommandPolicy${SID_ACCOUNT_ID}${SID_CLUSTER_NAME}",
         "Effect": "Allow",
         "Action": [
             "ssm:StartSession",
@@ -48,7 +50,7 @@ cat << EOF > new-statements.json
         ]
     },
     {
-        "Sid": "ECSDescribeAndListTasksServices-${JIT_ACCOUNT_ID}-${JIT_CLUSTER_NAME}",
+        "Sid": "ECSDescribeAndListTasksServices${SID_ACCOUNT_ID}${SID_CLUSTER_NAME}",
         "Effect": "Allow",
         "Action": [
             "ecs:DescribeTasks",
