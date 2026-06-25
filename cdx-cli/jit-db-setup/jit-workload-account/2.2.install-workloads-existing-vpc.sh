@@ -615,6 +615,11 @@ ECS_CLUSTER_ARN=$(aws ecs create-cluster \
 
 apply_ecs_tags "$ECS_CLUSTER_ARN" "$ECS_CLUSTER_NAME" "$TAGS_FILE"
 
+# Apply consistent discovery tags for CLI tag-based discovery
+aws ecs tag-resource \
+    --resource-arn "$ECS_CLUSTER_ARN" \
+    --tags key=owner,value=cloudanix key=service,value=jit-db-proxy key=purpose,value=cdx-jit-db
+
 SG_TAG_SPEC=$(generate_tag_specs "security-group" "$TAGS_FILE")
 # Create Security Group
 log "Creating Security Group..."

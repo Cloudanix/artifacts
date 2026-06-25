@@ -302,6 +302,7 @@ az vm create \
   --public-ip-address jumpbox-public-ip \
   --nsg jumpbox-nsg \
   --assign-identity \
+  --tags owner=cloudanix service=jump-box purpose=cdx-jit-db \
   --output none
 
 echo "Waiting 60s for VM identity to propagate..."
