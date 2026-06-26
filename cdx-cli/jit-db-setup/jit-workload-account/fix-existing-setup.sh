@@ -93,6 +93,68 @@ if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
 fi
 
 # ============================================================================
+# PRE-FLIGHT CHECKS
+# ============================================================================
+
+echo ""
+log "=== Pre-flight checks ==="
+
+# Check secrets exist in Secrets Manager
+log "Verifying secrets contain required keys..."
+SECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" \
+    --region "$TARGET_REGION" --query 'SecretString' --output text)
+
+REQUIRED_KEYS=("CDX_AUTH_TOKEN" "CDX_SIGNATURE_SECRET_KEY" "CDX_SENTRY_DSN" "CDX_DC" "CDX_API_BASE" "CDX_LOGGING_S3_BUCKET" "POSTGRES_PASSWORD" "ENCRYPTION_KEY")
+MISSING_KEYS=()
+for KEY in "${REQUIRED_KEYS[@]}"; do
+    if ! echo "$SECRET_VALUE" | jq -e --arg k "$KEY" '.[$k] // empty' > /dev/null 2>&1; then
+        MISSING_KEYS+=("$KEY")
+    fi
+done
+
+if [ ${#MISSING_KEYS[@]} -gt 0 ]; then
+    err "Secret '$SECRET_NAME' is missing keys: ${MISSING_KEYS[*]}. Add them before running this script."
+fi
+ok "All required secret keys present"
+
+# Ensure CloudWatch log groups exist
+LOG_GROUPS=(
+    "/ecs/cdx-jit-db/proxysql"
+    "/ecs/cdx-jit-db/proxyserver"
+    "/ecs/cdx-jit-db/query-logging"
+    "/ecs/cdx-jit-db/dam-server"
+    "/ecs/cdx-jit-db/postgresql"
+)
+for LG in "${LOG_GROUPS[@]}"; do
+    aws logs create-log-group --log-group-name "$LG" --region "$TARGET_REGION" 2>/dev/null || true
+done
+ok "Log groups verified/created"
+
+# Verify namespace exists
+NS_ID=$(aws servicediscovery list-namespaces --region "$TARGET_REGION" \
+    --query "Namespaces[?Name=='$NAMESPACE_NAME'].Id | [0]" --output text)
+if [ -z "$NS_ID" ] || [ "$NS_ID" = "None" ]; then
+    err "Service Connect namespace '$NAMESPACE_NAME' not found. Create it first."
+fi
+ok "Namespace exists: $NAMESPACE_NAME ($NS_ID)"
+
+# Verify ECS cluster is active
+CLUSTER_STATUS=$(aws ecs describe-clusters --clusters "$ECS_CLUSTER_NAME" \
+    --region "$TARGET_REGION" --query 'clusters[0].status' --output text 2>/dev/null)
+if [ "$CLUSTER_STATUS" != "ACTIVE" ]; then
+    err "ECS cluster '$ECS_CLUSTER_NAME' is not active (status: $CLUSTER_STATUS)"
+fi
+ok "Cluster is active: $ECS_CLUSTER_NAME"
+
+# Verify IAM role exists
+aws iam get-role --role-name cdx-ECSTaskRole > /dev/null 2>&1 || \
+    err "IAM role 'cdx-ECSTaskRole' not found."
+ok "IAM role exists: cdx-ECSTaskRole"
+
+echo ""
+ok "All pre-flight checks passed!"
+
+# ============================================================================
 # STEP 1: SYNC IMAGES FROM PROD ECR
 # ============================================================================
 
@@ -200,7 +262,9 @@ cat > /tmp/td-proxysql.json << EOF
 EOF
 aws ecs register-task-definition --cli-input-json file:///tmp/td-proxysql.json \
     --region "$TARGET_REGION" > /dev/null
-ok "Registered: proxysql"
+PROXYSQL_TD_ARN=$(aws ecs describe-task-definition --task-definition proxysql \
+    --region "$TARGET_REGION" --query 'taskDefinition.taskDefinitionArn' --output text)
+ok "Registered: proxysql ($PROXYSQL_TD_ARN)"
 
 # --- ProxyServer ---
 cat > /tmp/td-proxyserver.json << EOF
@@ -263,7 +327,9 @@ cat > /tmp/td-proxyserver.json << EOF
 EOF
 aws ecs register-task-definition --cli-input-json file:///tmp/td-proxyserver.json \
     --region "$TARGET_REGION" > /dev/null
-ok "Registered: proxyserver-task"
+PROXYSERVER_TD_ARN=$(aws ecs describe-task-definition --task-definition proxyserver-task \
+    --region "$TARGET_REGION" --query 'taskDefinition.taskDefinitionArn' --output text)
+ok "Registered: proxyserver-task ($PROXYSERVER_TD_ARN)"
 
 # --- Query Logging ---
 cat > /tmp/td-query-logging.json << EOF
@@ -329,7 +395,9 @@ cat > /tmp/td-query-logging.json << EOF
 EOF
 aws ecs register-task-definition --cli-input-json file:///tmp/td-query-logging.json \
     --region "$TARGET_REGION" > /dev/null
-ok "Registered: query-logging-task"
+QUERYLOGGING_TD_ARN=$(aws ecs describe-task-definition --task-definition query-logging-task \
+    --region "$TARGET_REGION" --query 'taskDefinition.taskDefinitionArn' --output text)
+ok "Registered: query-logging-task ($QUERYLOGGING_TD_ARN)"
 
 # --- DAM Server ---
 cat > /tmp/td-dam-server.json << EOF
@@ -394,7 +462,9 @@ cat > /tmp/td-dam-server.json << EOF
 EOF
 aws ecs register-task-definition --cli-input-json file:///tmp/td-dam-server.json \
     --region "$TARGET_REGION" > /dev/null
-ok "Registered: dam-server-task"
+DAMSERVER_TD_ARN=$(aws ecs describe-task-definition --task-definition dam-server-task \
+    --region "$TARGET_REGION" --query 'taskDefinition.taskDefinitionArn' --output text)
+ok "Registered: dam-server-task ($DAMSERVER_TD_ARN)"
 
 # --- PostgreSQL ---
 cat > /tmp/td-postgresql.json << EOF
@@ -459,7 +529,9 @@ cat > /tmp/td-postgresql.json << EOF
 EOF
 aws ecs register-task-definition --cli-input-json file:///tmp/td-postgresql.json \
     --region "$TARGET_REGION" > /dev/null
-ok "Registered: postgresql-task"
+POSTGRESQL_TD_ARN=$(aws ecs describe-task-definition --task-definition postgresql-task \
+    --region "$TARGET_REGION" --query 'taskDefinition.taskDefinitionArn' --output text)
+ok "Registered: postgresql-task ($POSTGRESQL_TD_ARN)"
 
 ok "All 5 task definitions registered."
 
@@ -491,8 +563,21 @@ for SVC in "${ALL_SERVICES[@]}"; do
 done
 
 # Wait for services to be fully deleted
-log "Waiting for services to drain (60s)..."
-sleep 60
+log "Waiting for services to drain..."
+for SVC in "${ALL_SERVICES[@]}"; do
+    WAIT_COUNT=0
+    while [ $WAIT_COUNT -lt 12 ]; do
+        SVC_STATUS=$(aws ecs describe-services --cluster "$ECS_CLUSTER_NAME" \
+            --services "$SVC" --region "$TARGET_REGION" \
+            --query 'services[0].status' --output text 2>/dev/null)
+        if [ "$SVC_STATUS" = "INACTIVE" ] || [ "$SVC_STATUS" = "None" ] || [ -z "$SVC_STATUS" ]; then
+            break
+        fi
+        sleep 10
+        WAIT_COUNT=$((WAIT_COUNT + 1))
+    done
+done
+ok "All services deleted"
 
 # Recreate in correct dependency order
 # 1. ProxySQL (no dependencies)
@@ -500,7 +585,7 @@ log "Creating proxysql service..."
 aws ecs create-service \
     --cluster "$ECS_CLUSTER_NAME" \
     --service-name proxysql \
-    --task-definition proxysql \
+    --task-definition "$PROXYSQL_TD_ARN" \
     --desired-count 1 \
     --launch-type FARGATE \
     --platform-version LATEST \
@@ -523,7 +608,7 @@ log "Creating postgresql service..."
 aws ecs create-service \
     --cluster "$ECS_CLUSTER_NAME" \
     --service-name postgresql \
-    --task-definition postgresql-task \
+    --task-definition "$POSTGRESQL_TD_ARN" \
     --desired-count 1 \
     --launch-type FARGATE \
     --platform-version LATEST \
@@ -546,7 +631,7 @@ log "Creating proxyserver service..."
 aws ecs create-service \
     --cluster "$ECS_CLUSTER_NAME" \
     --service-name proxyserver \
-    --task-definition proxyserver-task \
+    --task-definition "$PROXYSERVER_TD_ARN" \
     --desired-count 1 \
     --launch-type FARGATE \
     --platform-version LATEST \
@@ -575,7 +660,7 @@ log "Creating dam-server service..."
 aws ecs create-service \
     --cluster "$ECS_CLUSTER_NAME" \
     --service-name dam-server \
-    --task-definition dam-server-task \
+    --task-definition "$DAMSERVER_TD_ARN" \
     --desired-count 1 \
     --launch-type FARGATE \
     --platform-version LATEST \
@@ -604,7 +689,7 @@ log "Creating query-logging service..."
 aws ecs create-service \
     --cluster "$ECS_CLUSTER_NAME" \
     --service-name query-logging \
-    --task-definition query-logging-task \
+    --task-definition "$QUERYLOGGING_TD_ARN" \
     --desired-count 1 \
     --launch-type FARGATE \
     --platform-version LATEST \
