@@ -1165,13 +1165,17 @@ cat <<EOF > "query-logging-task-definition.json"
                 }
 EOF
 
-# Add POSTGRES_PASSWORD if DAM is enabled
+# Add POSTGRES_PASSWORD and ENCRYPTION_KEY if DAM is enabled
 if [ "$ENABLE_DAM" = true ]; then
     cat <<EOF >> "query-logging-task-definition.json"
                 ,
                 {
                     "name": "POSTGRES_PASSWORD",
                     "valueFrom": "$SECRET_ARN:POSTGRES_PASSWORD::"
+                },
+                {
+                    "name": "ENCRYPTION_KEY",
+                    "valueFrom": "$SECRET_ARN:ENCRYPTION_KEY::"
                 }
 EOF
 fi
@@ -1520,29 +1524,11 @@ aws ecs create-service \
         }]
     }'
 
-# Create Query Logging service
-log "Creating query-logging service..."
-aws ecs create-service \
-    --cluster $ECS_CLUSTER_NAME \
-    --service-name query-logging \
-    --task-definition query-logging-task \
-    --tags $SERVICE_TAGS \
-    --desired-count 1 \
-    --launch-type FARGATE \
-    --platform-version LATEST \
-    --network-configuration "awsvpcConfiguration={subnets=[$PRIVATE_SUBNET_1_ID,$PRIVATE_SUBNET_2_ID],securityGroups=[$ECS_SG_ID],assignPublicIp=DISABLED}" \
-    --enable-execute-command \
-    --service-connect-configuration '{
-        "enabled": true,
-        "namespace": "proxysql-proxyserver",
-        "services": []
-    }'
-
-# Create DAM services if enabled
+# Create DAM services if enabled (PostgreSQL must be up before query-logging)
 if [ "$ENABLE_DAM" = true ]; then
     log "Creating DAM services..."
     
-    # Create PostgreSQL service first
+    # Create PostgreSQL service first — query-logging depends on it
     log "Creating PostgreSQL service..."
     aws ecs create-service \
         --cluster $ECS_CLUSTER_NAME \
@@ -1567,12 +1553,33 @@ if [ "$ENABLE_DAM" = true ]; then
             }]
         }'
     
-    # Wait for PostgreSQL to be stable before creating DAM server
+    # Wait for PostgreSQL to be stable before starting dependent services
     log "Waiting for PostgreSQL service to be stable..."
     aws ecs wait services-stable \
         --cluster $ECS_CLUSTER_NAME \
         --services postgresql
-    
+fi
+
+# Create Query Logging service (after PostgreSQL is ready when DAM is enabled)
+log "Creating query-logging service..."
+aws ecs create-service \
+    --cluster $ECS_CLUSTER_NAME \
+    --service-name query-logging \
+    --task-definition query-logging-task \
+    --tags $SERVICE_TAGS \
+    --desired-count 1 \
+    --launch-type FARGATE \
+    --platform-version LATEST \
+    --network-configuration "awsvpcConfiguration={subnets=[$PRIVATE_SUBNET_1_ID,$PRIVATE_SUBNET_2_ID],securityGroups=[$ECS_SG_ID],assignPublicIp=DISABLED}" \
+    --enable-execute-command \
+    --service-connect-configuration '{
+        "enabled": true,
+        "namespace": "proxysql-proxyserver",
+        "services": []
+    }'
+
+# Create DAM Server service if enabled (after PostgreSQL is stable)
+if [ "$ENABLE_DAM" = true ]; then
     # Create DAM Server service
     log "Creating DAM Server service..."
     aws ecs create-service \

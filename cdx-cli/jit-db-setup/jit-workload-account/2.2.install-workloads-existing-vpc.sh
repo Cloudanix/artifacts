@@ -1007,26 +1007,42 @@ cat <<EOF > "query-logging-task-definition.json"
             "volumesFrom": [],
             "secrets": [
                 {
-                    "name": "CDX_DC",
-                    "valueFrom": "$SECRET_ARN:CDX_DC::"
+                    "name": "CDX_AUTH_TOKEN",
+                    "valueFrom": "$SECRET_ARN:CDX_AUTH_TOKEN::"
                 },
                 {
-                    "name": "CDX_LOGGING_S3_BUCKET",
-                    "valueFrom": "$SECRET_ARN:CDX_LOGGING_S3_BUCKET::"
+                    "name": "CDX_SIGNATURE_SECRET_KEY",
+                    "valueFrom": "$SECRET_ARN:CDX_SIGNATURE_SECRET_KEY::"
                 },
                 {
                     "name": "CDX_SENTRY_DSN",
                     "valueFrom": "$SECRET_ARN:CDX_SENTRY_DSN::"
+                },
+                {
+                    "name": "CDX_DC",
+                    "valueFrom": "$SECRET_ARN:CDX_DC::"
+                },
+                {
+                    "name": "CDX_API_BASE",
+                    "valueFrom": "$SECRET_ARN:CDX_API_BASE::"
+                },
+                {
+                    "name": "CDX_LOGGING_S3_BUCKET",
+                    "valueFrom": "$SECRET_ARN:CDX_LOGGING_S3_BUCKET::"
                 }
 EOF
 
-# Add POSTGRES_PASSWORD if DAM is enabled
+# Add POSTGRES_PASSWORD and ENCRYPTION_KEY if DAM is enabled
 if [ "$ENABLE_DAM" = true ]; then
     cat <<EOF >> "query-logging-task-definition.json"
                 ,
                 {
                     "name": "POSTGRES_PASSWORD",
                     "valueFrom": "$SECRET_ARN:POSTGRES_PASSWORD::"
+                },
+                {
+                    "name": "ENCRYPTION_KEY",
+                    "valueFrom": "$SECRET_ARN:ENCRYPTION_KEY::"
                 }
 EOF
 fi
