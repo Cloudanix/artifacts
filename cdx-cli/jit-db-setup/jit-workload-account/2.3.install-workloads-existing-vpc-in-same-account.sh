@@ -651,8 +651,7 @@ cat <<EOF > "proxyserver-task-definition-${SETUP_NUMBER}.json"
                     "name": "proxyserver-http",
                     "containerPort": 8079,
                     "hostPort": 8079,
-                    "protocol": "tcp",
-                    "appProtocol": "http"
+                    "protocol": "tcp"
                 }
             ],
             "essential": true,
@@ -881,26 +880,42 @@ cat <<EOF > "query-logging-task-definition-${SETUP_NUMBER}.json"
             "volumesFrom": [],
             "secrets": [
                 {
-                    "name": "CDX_DC",
-                    "valueFrom": "$SECRET_ARN:CDX_DC::"
+                    "name": "CDX_AUTH_TOKEN",
+                    "valueFrom": "$SECRET_ARN:CDX_AUTH_TOKEN::"
                 },
                 {
-                    "name": "CDX_LOGGING_S3_BUCKET",
-                    "valueFrom": "$SECRET_ARN:CDX_LOGGING_S3_BUCKET::"
+                    "name": "CDX_SIGNATURE_SECRET_KEY",
+                    "valueFrom": "$SECRET_ARN:CDX_SIGNATURE_SECRET_KEY::"
                 },
                 {
                     "name": "CDX_SENTRY_DSN",
                     "valueFrom": "$SECRET_ARN:CDX_SENTRY_DSN::"
+                },
+                {
+                    "name": "CDX_DC",
+                    "valueFrom": "$SECRET_ARN:CDX_DC::"
+                },
+                {
+                    "name": "CDX_API_BASE",
+                    "valueFrom": "$SECRET_ARN:CDX_API_BASE::"
+                },
+                {
+                    "name": "CDX_LOGGING_S3_BUCKET",
+                    "valueFrom": "$SECRET_ARN:CDX_LOGGING_S3_BUCKET::"
                 }
 EOF
 
-# Add POSTGRES_PASSWORD if DAM is enabled
+# Add POSTGRES_PASSWORD and ENCRYPTION_KEY if DAM is enabled
 if [ "$ENABLE_DAM" = true ]; then
     cat <<EOF >> "query-logging-task-definition-${SETUP_NUMBER}.json"
                 ,
                 {
                     "name": "POSTGRES_PASSWORD",
                     "valueFrom": "$SECRET_ARN:POSTGRES_PASSWORD::"
+                },
+                {
+                    "name": "ENCRYPTION_KEY",
+                    "valueFrom": "$SECRET_ARN:ENCRYPTION_KEY::"
                 }
 EOF
 fi
@@ -1252,29 +1267,11 @@ aws ecs create-service \
         }]
     }'
 
-# Create Query Logging service
-log "Creating query-logging service..."
-aws ecs create-service \
-    --cluster $ECS_CLUSTER_NAME \
-    --service-name query-logging \
-    --task-definition query-logging-task-$SETUP_NUMBER \
-    --tags $SERVICE_TAGS \
-    --desired-count 1 \
-    --launch-type FARGATE \
-    --platform-version LATEST \
-    --network-configuration "awsvpcConfiguration={subnets=[$PRIVATE_SUBNET_1_ID,$PRIVATE_SUBNET_2_ID],securityGroups=[$ECS_SG_ID],assignPublicIp=DISABLED}" \
-    --enable-execute-command \
-    --service-connect-configuration '{
-        "enabled": true,
-        "namespace": "'$NAMESPACE_NAME'",
-        "services": []
-    }'
-
-# Create DAM services if enabled
+# Create DAM services if enabled (PostgreSQL must be up before query-logging)
 if [ "$ENABLE_DAM" = true ]; then
     log "Creating DAM services..."
     
-    # Create PostgreSQL service first
+    # Create PostgreSQL service first — query-logging depends on it
     log "Creating PostgreSQL service..."
     aws ecs create-service \
         --cluster $ECS_CLUSTER_NAME \
@@ -1299,12 +1296,33 @@ if [ "$ENABLE_DAM" = true ]; then
             }]
         }'
     
-    # Wait for PostgreSQL to be stable
+    # Wait for PostgreSQL to be stable before starting dependent services
     log "Waiting for PostgreSQL service to be stable..."
     aws ecs wait services-stable \
         --cluster $ECS_CLUSTER_NAME \
         --services postgresql
-    
+fi
+
+# Create Query Logging service (after PostgreSQL is ready when DAM is enabled)
+log "Creating query-logging service..."
+aws ecs create-service \
+    --cluster $ECS_CLUSTER_NAME \
+    --service-name query-logging \
+    --task-definition query-logging-task-$SETUP_NUMBER \
+    --tags $SERVICE_TAGS \
+    --desired-count 1 \
+    --launch-type FARGATE \
+    --platform-version LATEST \
+    --network-configuration "awsvpcConfiguration={subnets=[$PRIVATE_SUBNET_1_ID,$PRIVATE_SUBNET_2_ID],securityGroups=[$ECS_SG_ID],assignPublicIp=DISABLED}" \
+    --enable-execute-command \
+    --service-connect-configuration '{
+        "enabled": true,
+        "namespace": "'$NAMESPACE_NAME'",
+        "services": []
+    }'
+
+# Create DAM Server service if enabled (after PostgreSQL is stable)
+if [ "$ENABLE_DAM" = true ]; then
     # Create DAM Server service
     log "Creating DAM Server service..."
     aws ecs create-service \
