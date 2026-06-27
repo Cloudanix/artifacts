@@ -910,8 +910,7 @@ cat <<EOF > "proxyserver-task-definition.json"
                     "name": "proxyserver-http",
                     "containerPort": 8079,
                     "hostPort": 8079,
-                    "protocol": "tcp",
-                    "appProtocol": "http"
+                    "protocol": "tcp"
                 }
             ],
             "essential": true,
