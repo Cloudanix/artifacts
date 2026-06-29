@@ -24,6 +24,7 @@ echo "=== AWS EKS JIT — JIT Workload Account Policy Setup ==="
 echo ""
 
 AWS_REGION=$(prompt_with_default "AWS Region" "us-east-1")
+export AWS_DEFAULT_REGION="$AWS_REGION"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 info "Account ID: $ACCOUNT_ID"
 

@@ -20,6 +20,7 @@ echo ""
 
 read -rp "AWS Region [us-east-1]: " INPUT_REGION
 REGION="${INPUT_REGION:-us-east-1}"
+export AWS_DEFAULT_REGION="$REGION"
 
 read -rp "VPC ID (required): " VPC_ID
 if [[ -z "$VPC_ID" ]]; then
