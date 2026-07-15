@@ -538,7 +538,7 @@ cat > /tmp/td-proxyserver.json << EOF
     "volumes": ${EFS_VOLUMES},
     "containerDefinitions": [{
         "name": "vmproxyserver",
-        "image": "${ECR_PREFIX}/cloudanix/cdx-jit-vm-vmproxyserver:latest",
+        "image": "${ECR_PREFIX}/cloudanix/ecr-aws-jit-vm-proxyserver:latest",
         "essential": true,
         "portMappings": [{"name":"vmproxyserver","containerPort":8079,"protocol":"tcp"}],
         "mountPoints": [
@@ -652,9 +652,9 @@ create_or_skip_service() {
     fi
 }
 
-create_or_skip_service "${PROJECT_NAME}-sshpiper" "${PROJECT_NAME}-sshpiper" "$SC_SSHPIPER"
-create_or_skip_service "${PROJECT_NAME}-vmproxyserver" "${PROJECT_NAME}-vmproxyserver" "$SC_VMPROXY"
-create_or_skip_service "${PROJECT_NAME}-vmcommandlogging" "${PROJECT_NAME}-vmcommandlogging" "$SC_LOGGING"
+create_or_skip_service "jit-vm-proxy-sshpiper" "${PROJECT_NAME}-sshpiper" "$SC_SSHPIPER"
+create_or_skip_service "jit-vm-proxy-vmproxyserver" "${PROJECT_NAME}-vmproxyserver" "$SC_VMPROXY"
+create_or_skip_service "jit-vm-proxy-vmcommandlogging" "${PROJECT_NAME}-vmcommandlogging" "$SC_LOGGING"
 
 # ============================================================================
 # OUTPUT
@@ -674,9 +674,9 @@ echo "  Namespace:       $NAMESPACE ($NAMESPACE_ID)"
 echo "  Log Group:       $LOG_GROUP"
 echo ""
 echo "  Services (Service Connect):"
-echo "    sshpiper:2222         — SSH proxy"
-echo "    vmproxyserver:8079    — control plane"
-echo "    vmcommandlogging      — log uploader"
+echo "    jit-vm-proxy-sshpiper:2222         — SSH proxy"
+echo "    jit-vm-proxy-vmproxyserver:8079    — control plane"
+echo "    jit-vm-proxy-vmcommandlogging      — log uploader"
 echo ""
 echo "  Shared EFS: $EFS_ID"
 echo "    /tmp/sshpiper/workingdir  (AP: $SSHPIPER_AP)"
