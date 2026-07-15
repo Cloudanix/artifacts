@@ -25,25 +25,37 @@ prompt_with_default() {
 # CONFIGURATION
 # ============================================================================
 
-echo "=== JIT VM Workload Infrastructure Setup ==="
+echo "=== JIT VM Workload Infrastructure Setup (Existing VPC) ==="
+echo ""
+echo "This script deploys JIT VM workloads into your existing VPC."
+echo "You need to provide the VPC ID and private subnet IDs."
 echo ""
 
 AWS_REGION=$(prompt_with_default "AWS Region" "us-east-1")
 PROJECT_NAME=$(prompt_with_default "Project Name" "cdx-jit-vm")
+
+# Existing VPC inputs
+read -rp "VPC ID (required): " VPC_ID
+if [[ -z "$VPC_ID" ]]; then
+    echo "ERROR: VPC ID is required."
+    exit 1
+fi
+
+read -rp "Private Subnet 1 ID (required): " PRIV_SUB_1
+if [[ -z "$PRIV_SUB_1" ]]; then
+    echo "ERROR: Private Subnet 1 ID is required."
+    exit 1
+fi
+
+read -rp "Private Subnet 2 ID (required): " PRIV_SUB_2
+if [[ -z "$PRIV_SUB_2" ]]; then
+    echo "ERROR: Private Subnet 2 ID is required."
+    exit 1
+fi
+
 S3_BUCKET_NAME=$(prompt_with_default "S3 Bucket for Recordings" "${PROJECT_NAME}-recordings-$(aws sts get-caller-identity --query Account --output text)")
 
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-
-VPC_CIDR=$(prompt_with_default "VPC CIDR" "10.50.0.0/16")
-
-# Auto-calculated subnet CIDRs
-VPC_BASE=$(echo "$VPC_CIDR" | cut -d'.' -f1-2)
-PUBLIC_SUBNET_1_CIDR="${VPC_BASE}.1.0/24"
-PUBLIC_SUBNET_2_CIDR="${VPC_BASE}.2.0/24"
-PRIVATE_SUBNET_1_CIDR="${VPC_BASE}.3.0/24"
-PRIVATE_SUBNET_2_CIDR="${VPC_BASE}.4.0/24"
-AZ_1="${AWS_REGION}a"
-AZ_2="${AWS_REGION}b"
 
 CLUSTER_NAME="${PROJECT_NAME}-cluster"
 ROLE_NAME="${PROJECT_NAME}-ECSRole"
@@ -51,128 +63,45 @@ LOG_GROUP="/ecs/${PROJECT_NAME}"
 NAMESPACE="${PROJECT_NAME}-local"
 ECR_PREFIX="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
-# Validate AWS connectivity
+# ============================================================================
+# VALIDATE INPUTS
+# ============================================================================
+
+step "Validating Inputs"
+
 info "Validating AWS access..."
 aws sts get-caller-identity > /dev/null || { echo "ERROR: AWS credentials not configured"; exit 1; }
 
+VPC_CIDR=$(aws ec2 describe-vpcs --vpc-ids "$VPC_ID" --region "$AWS_REGION" \
+    --query "Vpcs[0].CidrBlock" --output text 2>/dev/null)
+
+if [[ -z "$VPC_CIDR" || "$VPC_CIDR" == "None" ]]; then
+    echo "ERROR: VPC $VPC_ID not found in region $AWS_REGION."
+    exit 1
+fi
+ok "VPC: $VPC_ID ($VPC_CIDR)"
+
+# Validate subnets belong to VPC
+for SUB_ID in "$PRIV_SUB_1" "$PRIV_SUB_2"; do
+    SUB_VPC=$(aws ec2 describe-subnets --subnet-ids "$SUB_ID" --region "$AWS_REGION" \
+        --query "Subnets[0].VpcId" --output text 2>/dev/null)
+    if [[ "$SUB_VPC" != "$VPC_ID" ]]; then
+        echo "ERROR: Subnet $SUB_ID does not belong to VPC $VPC_ID (belongs to $SUB_VPC)."
+        exit 1
+    fi
+done
+ok "Private Subnet 1: $PRIV_SUB_1"
+ok "Private Subnet 2: $PRIV_SUB_2"
+
 echo ""
+echo "=== Configuration ==="
 echo "Account:       $ACCOUNT_ID"
 echo "Region:        $AWS_REGION"
 echo "Project:       $PROJECT_NAME"
-echo "VPC CIDR:      $VPC_CIDR"
-echo "Public Subs:   $PUBLIC_SUBNET_1_CIDR ($AZ_1), $PUBLIC_SUBNET_2_CIDR ($AZ_2)"
-echo "Private Subs:  $PRIVATE_SUBNET_1_CIDR ($AZ_1), $PRIVATE_SUBNET_2_CIDR ($AZ_2)"
+echo "VPC:           $VPC_ID ($VPC_CIDR)"
+echo "Private Sub 1: $PRIV_SUB_1"
+echo "Private Sub 2: $PRIV_SUB_2"
 echo ""
-
-# ============================================================================
-# VPC (idempotent — checks for existing)
-# ============================================================================
-
-step "VPC"
-VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=${PROJECT_NAME}-vpc" "Name=cidr,Values=${VPC_CIDR}" \
-    --query 'Vpcs[0].VpcId' --output text --region "$AWS_REGION" 2>/dev/null)
-
-if [ -z "$VPC_ID" ] || [ "$VPC_ID" = "None" ]; then
-    VPC_ID=$(aws ec2 create-vpc --cidr-block "$VPC_CIDR" \
-        --tag-specifications "ResourceType=vpc,Tags=[{Key=Name,Value=${PROJECT_NAME}-vpc},{Key=Purpose,Value=vm-jit},{Key=created_by,Value=cloudanix}]" \
-        --query 'Vpc.VpcId' --output text --region "$AWS_REGION")
-    aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-hostnames '{"Value":true}' --region "$AWS_REGION"
-    aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-support '{"Value":true}' --region "$AWS_REGION"
-    ok "VPC created: $VPC_ID"
-else
-    ok "VPC exists: $VPC_ID"
-fi
-
-# Internet Gateway
-IGW_ID=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$VPC_ID" \
-    --query 'InternetGateways[0].InternetGatewayId' --output text --region "$AWS_REGION" 2>/dev/null)
-
-if [ -z "$IGW_ID" ] || [ "$IGW_ID" = "None" ]; then
-    IGW_ID=$(aws ec2 create-internet-gateway \
-        --tag-specifications "ResourceType=internet-gateway,Tags=[{Key=Name,Value=${PROJECT_NAME}-igw}]" \
-        --query 'InternetGateway.InternetGatewayId' --output text --region "$AWS_REGION")
-    aws ec2 attach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID" --region "$AWS_REGION"
-    ok "IGW created: $IGW_ID"
-else
-    ok "IGW exists: $IGW_ID"
-fi
-
-# ─── Subnets (2 public + 2 private across 2 AZs) ──────────────────────────
-
-step "Subnets (multi-AZ)"
-
-find_or_create_subnet() {
-    local vpc_id=$1 cidr=$2 az=$3 name=$4
-    local sub_id=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" "Name=cidr-block,Values=$cidr" \
-        --query 'Subnets[0].SubnetId' --output text --region "$AWS_REGION" 2>/dev/null)
-    if [ -z "$sub_id" ] || [ "$sub_id" = "None" ]; then
-        sub_id=$(aws ec2 create-subnet --vpc-id "$vpc_id" --cidr-block "$cidr" --availability-zone "$az" \
-            --tag-specifications "ResourceType=subnet,Tags=[{Key=Name,Value=${name}}]" \
-            --query 'Subnet.SubnetId' --output text --region "$AWS_REGION")
-    fi
-    echo "$sub_id"
-}
-
-PUB_SUB_1=$(find_or_create_subnet "$VPC_ID" "$PUBLIC_SUBNET_1_CIDR" "$AZ_1" "${PROJECT_NAME}-public-1")
-aws ec2 modify-subnet-attribute --subnet-id "$PUB_SUB_1" --map-public-ip-on-launch --region "$AWS_REGION" 2>/dev/null || true
-
-PUB_SUB_2=$(find_or_create_subnet "$VPC_ID" "$PUBLIC_SUBNET_2_CIDR" "$AZ_2" "${PROJECT_NAME}-public-2")
-aws ec2 modify-subnet-attribute --subnet-id "$PUB_SUB_2" --map-public-ip-on-launch --region "$AWS_REGION" 2>/dev/null || true
-
-PRIV_SUB_1=$(find_or_create_subnet "$VPC_ID" "$PRIVATE_SUBNET_1_CIDR" "$AZ_1" "${PROJECT_NAME}-private-1")
-PRIV_SUB_2=$(find_or_create_subnet "$VPC_ID" "$PRIVATE_SUBNET_2_CIDR" "$AZ_2" "${PROJECT_NAME}-private-2")
-
-ok "Public:  $PUB_SUB_1 ($AZ_1), $PUB_SUB_2 ($AZ_2)"
-ok "Private: $PRIV_SUB_1 ($AZ_1), $PRIV_SUB_2 ($AZ_2)"
-
-# ─── NAT Gateway ───────────────────────────────────────────────────────────
-
-step "NAT Gateway"
-NAT_ID=$(aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$VPC_ID" "Name=state,Values=available,pending" \
-    --query 'NatGateways[0].NatGatewayId' --output text --region "$AWS_REGION" 2>/dev/null)
-
-if [ -z "$NAT_ID" ] || [ "$NAT_ID" = "None" ]; then
-    EIP=$(aws ec2 allocate-address --domain vpc --query 'AllocationId' --output text --region "$AWS_REGION")
-    NAT_ID=$(aws ec2 create-nat-gateway --subnet-id "$PUB_SUB_1" --allocation-id "$EIP" \
-        --tag-specifications "ResourceType=natgateway,Tags=[{Key=Name,Value=${PROJECT_NAME}-nat}]" \
-        --query 'NatGateway.NatGatewayId' --output text --region "$AWS_REGION")
-    info "Waiting for NAT Gateway..."
-    aws ec2 wait nat-gateway-available --nat-gateway-ids "$NAT_ID" --region "$AWS_REGION"
-    ok "NAT created: $NAT_ID"
-else
-    ok "NAT exists: $NAT_ID"
-fi
-
-# ─── Route Tables ──────────────────────────────────────────────────────────
-
-step "Route Tables"
-
-# Public route table
-PUB_RT=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Name,Values=${PROJECT_NAME}-pub-rt" \
-    --query 'RouteTables[0].RouteTableId' --output text --region "$AWS_REGION" 2>/dev/null)
-
-if [ -z "$PUB_RT" ] || [ "$PUB_RT" = "None" ]; then
-    PUB_RT=$(aws ec2 create-route-table --vpc-id "$VPC_ID" \
-        --tag-specifications "ResourceType=route-table,Tags=[{Key=Name,Value=${PROJECT_NAME}-pub-rt}]" \
-        --query 'RouteTable.RouteTableId' --output text --region "$AWS_REGION")
-    aws ec2 create-route --route-table-id "$PUB_RT" --destination-cidr-block "0.0.0.0/0" --gateway-id "$IGW_ID" --region "$AWS_REGION" > /dev/null
-    aws ec2 associate-route-table --route-table-id "$PUB_RT" --subnet-id "$PUB_SUB_1" --region "$AWS_REGION" > /dev/null
-    aws ec2 associate-route-table --route-table-id "$PUB_RT" --subnet-id "$PUB_SUB_2" --region "$AWS_REGION" > /dev/null
-fi
-
-# Private route table
-PRIV_RT=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Name,Values=${PROJECT_NAME}-priv-rt" \
-    --query 'RouteTables[0].RouteTableId' --output text --region "$AWS_REGION" 2>/dev/null)
-
-if [ -z "$PRIV_RT" ] || [ "$PRIV_RT" = "None" ]; then
-    PRIV_RT=$(aws ec2 create-route-table --vpc-id "$VPC_ID" \
-        --tag-specifications "ResourceType=route-table,Tags=[{Key=Name,Value=${PROJECT_NAME}-priv-rt}]" \
-        --query 'RouteTable.RouteTableId' --output text --region "$AWS_REGION")
-    aws ec2 create-route --route-table-id "$PRIV_RT" --destination-cidr-block "0.0.0.0/0" --nat-gateway-id "$NAT_ID" --region "$AWS_REGION" > /dev/null
-    aws ec2 associate-route-table --route-table-id "$PRIV_RT" --subnet-id "$PRIV_SUB_1" --region "$AWS_REGION" > /dev/null
-    aws ec2 associate-route-table --route-table-id "$PRIV_RT" --subnet-id "$PRIV_SUB_2" --region "$AWS_REGION" > /dev/null
-fi
-ok "Route tables configured"
 
 # ============================================================================
 # SECURITY GROUPS
@@ -187,11 +116,14 @@ if [ -z "$ECS_SG" ] || [ "$ECS_SG" = "None" ]; then
     ECS_SG=$(aws ec2 create-security-group --group-name "${PROJECT_NAME}-ecs-sg" \
         --description "ECS tasks - sshpiper(2222), proxyserver(8079), NFS(2049)" \
         --vpc-id "$VPC_ID" \
-        --tag-specifications "ResourceType=security-group,Tags=[{Key=Name,Value=${PROJECT_NAME}-ecs-sg}]" \
+        --tag-specifications "ResourceType=security-group,Tags=[{Key=Name,Value=${PROJECT_NAME}-ecs-sg},{Key=Purpose,Value=vm-jit},{Key=created_by,Value=cloudanix}]" \
         --query 'GroupId' --output text --region "$AWS_REGION")
     aws ec2 authorize-security-group-ingress --group-id "$ECS_SG" --protocol tcp --port 2222 --cidr "$VPC_CIDR" --region "$AWS_REGION" > /dev/null
     aws ec2 authorize-security-group-ingress --group-id "$ECS_SG" --protocol tcp --port 8079 --cidr "$VPC_CIDR" --region "$AWS_REGION" > /dev/null
     aws ec2 authorize-security-group-ingress --group-id "$ECS_SG" --protocol tcp --port 2049 --source-group "$ECS_SG" --region "$AWS_REGION" > /dev/null
+    ok "ECS SG created: $ECS_SG"
+else
+    ok "ECS SG exists: $ECS_SG"
 fi
 
 VPCE_SG=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=${PROJECT_NAME}-vpce-sg" \
@@ -200,12 +132,13 @@ VPCE_SG=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID
 if [ -z "$VPCE_SG" ] || [ "$VPCE_SG" = "None" ]; then
     VPCE_SG=$(aws ec2 create-security-group --group-name "${PROJECT_NAME}-vpce-sg" \
         --description "VPC Endpoints - HTTPS from VPC" --vpc-id "$VPC_ID" \
-        --tag-specifications "ResourceType=security-group,Tags=[{Key=Name,Value=${PROJECT_NAME}-vpce-sg}]" \
+        --tag-specifications "ResourceType=security-group,Tags=[{Key=Name,Value=${PROJECT_NAME}-vpce-sg},{Key=Purpose,Value=vm-jit},{Key=created_by,Value=cloudanix}]" \
         --query 'GroupId' --output text --region "$AWS_REGION")
     aws ec2 authorize-security-group-ingress --group-id "$VPCE_SG" --protocol tcp --port 443 --cidr "$VPC_CIDR" --region "$AWS_REGION" > /dev/null
+    ok "VPCE SG created: $VPCE_SG"
+else
+    ok "VPCE SG exists: $VPCE_SG"
 fi
-
-ok "ECS SG: $ECS_SG | VPCE SG: $VPCE_SG"
 
 # ============================================================================
 # VPC ENDPOINTS (SSM for ECS Exec)
@@ -221,7 +154,7 @@ for SVC in ssm ssmmessages ec2messages; do
             --service-name "com.amazonaws.${AWS_REGION}.${SVC}" \
             --subnet-ids "$PRIV_SUB_1" "$PRIV_SUB_2" \
             --security-group-ids "$VPCE_SG" --private-dns-enabled \
-            --tag-specifications "ResourceType=vpc-endpoint,Tags=[{Key=Name,Value=${PROJECT_NAME}-${SVC}}]" \
+            --tag-specifications "ResourceType=vpc-endpoint,Tags=[{Key=Name,Value=${PROJECT_NAME}-${SVC}},{Key=created_by,Value=cloudanix}]" \
             --query 'VpcEndpoint.VpcEndpointId' --output text --region "$AWS_REGION")
         info "  $SVC: $VPCE_ID (created)"
     else
@@ -337,15 +270,33 @@ APP_SECRET_ARN=$(aws secretsmanager describe-secret --secret-id "$APP_SECRET_NAM
 
 step "EFS File System"
 
-EFS_ID=$(aws efs describe-file-systems --query "FileSystems[?Tags[?Key=='Name'&&Value=='${PROJECT_NAME}-efs']].FileSystemId | [0]" \
+# Find EFS by name tag, then verify it's in the SAME VPC via mount targets
+EFS_ID=""
+CANDIDATE_EFS_IDS=$(aws efs describe-file-systems \
+    --query "FileSystems[?Tags[?Key=='Name'&&Value=='${PROJECT_NAME}-efs']].FileSystemId[]" \
     --output text --region "$AWS_REGION" 2>/dev/null)
 
-if [ -z "$EFS_ID" ] || [ "$EFS_ID" = "None" ]; then
+for FS_ID in $CANDIDATE_EFS_IDS; do
+    MT_VPC=$(aws efs describe-mount-targets --file-system-id "$FS_ID" \
+        --query 'MountTargets[0].VpcId' --output text --region "$AWS_REGION" 2>/dev/null)
+    if [ "$MT_VPC" = "$VPC_ID" ]; then
+        EFS_ID="$FS_ID"
+        break
+    elif [ -z "$MT_VPC" ] || [ "$MT_VPC" = "None" ]; then
+        # EFS exists but has no mount targets — safe to reuse
+        EFS_ID="$FS_ID"
+        break
+    fi
+    # Otherwise this EFS is in a different VPC — skip it
+    info "Skipping EFS $FS_ID (belongs to VPC $MT_VPC, not $VPC_ID)"
+done
+
+if [ -z "$EFS_ID" ]; then
     EFS_ID=$(aws efs create-file-system \
         --performance-mode generalPurpose \
         --throughput-mode bursting \
         --encrypted \
-        --tags "Key=Name,Value=${PROJECT_NAME}-efs" "Key=created_by,Value=cloudanix" \
+        --tags "Key=Name,Value=${PROJECT_NAME}-efs" "Key=created_by,Value=cloudanix" "Key=VpcId,Value=${VPC_ID}" \
         --query 'FileSystemId' --output text --region "$AWS_REGION")
 
     info "Waiting for EFS to become available..."
@@ -355,9 +306,9 @@ if [ -z "$EFS_ID" ] || [ "$EFS_ID" = "None" ]; then
         if [ "$EFS_STATE" = "available" ]; then break; fi
         sleep 5
     done
-    ok "EFS created: $EFS_ID"
+    ok "EFS created: $EFS_ID (for VPC $VPC_ID)"
 else
-    ok "EFS exists: $EFS_ID"
+    ok "EFS exists: $EFS_ID (in VPC $VPC_ID)"
 fi
 
 # Mount targets (idempotent — only create if not present)
@@ -398,7 +349,7 @@ fi
 ok "EFS: $EFS_ID (sshpiper-ap: $SSHPIPER_AP, recordings-ap: $RECORDINGS_AP)"
 
 # ============================================================================
-# CLOUD MAP NAMESPACE (Service Discovery) — FIXED: proper timeout handling
+# CLOUD MAP NAMESPACE (Service Discovery)
 # ============================================================================
 
 step "Cloud Map Namespace"
@@ -434,7 +385,6 @@ if [ -z "$NAMESPACE_ID" ] || [ "$NAMESPACE_ID" = "None" ]; then
     if [ "$NAMESPACE_READY" = false ]; then
         echo "[ERROR] Timed out waiting for Cloud Map namespace creation (3 min)."
         echo "        Operation ID: $OPERATION_ID"
-        echo "        Check: aws servicediscovery get-operation --operation-id $OPERATION_ID --region $AWS_REGION"
         exit 1
     fi
 
@@ -461,13 +411,11 @@ CLUSTER_STATUS=$(aws ecs describe-clusters --clusters "$CLUSTER_NAME" \
     --query 'clusters[0].status' --output text --region "$AWS_REGION" 2>/dev/null)
 
 if [ "$CLUSTER_STATUS" = "ACTIVE" ]; then
-    # Update with namespace if needed
     aws ecs update-cluster --cluster "$CLUSTER_NAME" \
         --service-connect-defaults "namespace=arn:aws:servicediscovery:${AWS_REGION}:${ACCOUNT_ID}:namespace/${NAMESPACE_ID}" \
         --region "$AWS_REGION" > /dev/null 2>&1 || true
     ok "Cluster exists: $CLUSTER_NAME"
 else
-    # Retry loop to handle SLR propagation delay
     CLUSTER_CREATED=false
     for attempt in 1 2 3; do
         if aws ecs create-cluster --cluster-name "$CLUSTER_NAME" \
@@ -484,8 +432,7 @@ else
         sleep 15
     done
     if [ "$CLUSTER_CREATED" = false ]; then
-        echo "[ERROR] Failed to create ECS cluster after 3 attempts. ECS Service Linked Role may need more time."
-        echo "        Try running the script again in a minute."
+        echo "[ERROR] Failed to create ECS cluster after 3 attempts."
         exit 1
     fi
     ok "Cluster created: $CLUSTER_NAME"
@@ -660,10 +607,9 @@ create_or_skip_service "jit-vm-proxy-vmcommandlogging" "${PROJECT_NAME}-vmcomman
 # OUTPUT
 # ============================================================================
 
-step "Infrastructure Setup Complete"
+step "Infrastructure Setup Complete (Existing VPC)"
 echo ""
 echo "  VPC:             $VPC_ID ($VPC_CIDR)"
-echo "  Public Subnets:  $PUB_SUB_1, $PUB_SUB_2"
 echo "  Private Subnets: $PRIV_SUB_1, $PRIV_SUB_2"
 echo "  ECS Cluster:     $CLUSTER_NAME"
 echo "  ECS SG:          $ECS_SG"
@@ -681,6 +627,9 @@ echo ""
 echo "  Shared EFS: $EFS_ID"
 echo "    /tmp/sshpiper/workingdir  (AP: $SSHPIPER_AP)"
 echo "    /tmp/recordings           (AP: $RECORDINGS_AP)"
+echo ""
+echo "  IMPORTANT: Ensure your private subnets have outbound internet access"
+echo "  (NAT Gateway) or the VPC endpoints above for SSM connectivity."
 echo ""
 echo "  Next: ./3.setup-vpc-peering.sh"
 echo ""
