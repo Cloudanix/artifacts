@@ -511,7 +511,7 @@ cat > /tmp/td-proxyserver.json << EOF
             {"name":"CDX_API_AUTH_TOKEN","valueFrom":"${APP_SECRET_ARN}:CDX_API_AUTH_TOKEN::"},
             {"name":"CDX_SIGNATURE_SECRET_KEY","valueFrom":"${APP_SECRET_ARN}:CDX_SIGNATURE_SECRET_KEY::"},
             {"name":"CDX_SENTRY_DSN","valueFrom":"${APP_SECRET_ARN}:CDX_SENTRY_DSN::"},
-            {"name":"CDX_DC","valueFrom":"${APP_SECRET_ARN}:CDX_DC::"},
+            {"name":"CDX_DATA_CENTER","valueFrom":"${APP_SECRET_ARN}:CDX_DATA_CENTER::"},
             {"name":"CDX_API_BASE","valueFrom":"${APP_SECRET_ARN}:CDX_API_BASE::"}
         ],
         "healthCheck": {
@@ -557,7 +557,7 @@ cat > /tmp/td-logging.json << EOF
             {"name":"CDX_API_AUTH_TOKEN","valueFrom":"${APP_SECRET_ARN}:CDX_API_AUTH_TOKEN::"},
             {"name":"CDX_SIGNATURE_SECRET_KEY","valueFrom":"${APP_SECRET_ARN}:CDX_SIGNATURE_SECRET_KEY::"},
             {"name":"CDX_SENTRY_DSN","valueFrom":"${APP_SECRET_ARN}:CDX_SENTRY_DSN::"},
-            {"name":"CDX_DC","valueFrom":"${APP_SECRET_ARN}:CDX_DC::"},
+            {"name":"CDX_DATA_CENTER","valueFrom":"${APP_SECRET_ARN}:CDX_DATA_CENTER::"},
             {"name":"CDX_API_BASE","valueFrom":"${APP_SECRET_ARN}:CDX_API_BASE::"}
         ],
         "healthCheck": {
