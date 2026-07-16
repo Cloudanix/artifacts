@@ -310,12 +310,16 @@ if [ "$EXISTING_SECRET" = "no" ]; then
     CDX_API_AUTH_TOKEN=$(prompt_with_default "CDX_API_AUTH_TOKEN" "")
     CDX_SIGNATURE_SECRET_KEY=$(prompt_with_default "CDX_SIGNATURE_SECRET_KEY" "")
     CDX_SENTRY_DSN=$(prompt_with_default "CDX_SENTRY_DSN (optional, press enter to skip)" "")
+    CDX_DATA_CENTER=$(prompt_with_default "CDX_DATA_CENTER" "US")
+    CDX_API_BASE=$(prompt_with_default "CDX_API_BASE" "https://console.cloudanix.com/")
 
     SECRET_JSON=$(jq -n \
         --arg token "$CDX_API_AUTH_TOKEN" \
         --arg sig "$CDX_SIGNATURE_SECRET_KEY" \
         --arg sentry "$CDX_SENTRY_DSN" \
-        '{CDX_API_AUTH_TOKEN: $token, CDX_SIGNATURE_SECRET_KEY: $sig, CDX_SENTRY_DSN: $sentry}')
+        --arg dc "$CDX_DATA_CENTER" \
+        --arg api_base "$CDX_API_BASE" \
+        '{CDX_API_AUTH_TOKEN: $token, CDX_SIGNATURE_SECRET_KEY: $sig, CDX_SENTRY_DSN: $sentry, CDX_DATA_CENTER: $dc, CDX_DC: $dc, CDX_API_BASE: $api_base}')
 
     aws secretsmanager create-secret \
         --name "$APP_SECRET_NAME" \
@@ -559,7 +563,10 @@ cat > /tmp/td-proxyserver.json << EOF
         "secrets": [
             {"name":"CDX_API_AUTH_TOKEN","valueFrom":"${APP_SECRET_ARN}:CDX_API_AUTH_TOKEN::"},
             {"name":"CDX_SIGNATURE_SECRET_KEY","valueFrom":"${APP_SECRET_ARN}:CDX_SIGNATURE_SECRET_KEY::"},
-            {"name":"CDX_SENTRY_DSN","valueFrom":"${APP_SECRET_ARN}:CDX_SENTRY_DSN::"}
+            {"name":"CDX_SENTRY_DSN","valueFrom":"${APP_SECRET_ARN}:CDX_SENTRY_DSN::"},
+            {"name":"CDX_DATA_CENTER","valueFrom":"${APP_SECRET_ARN}:CDX_DATA_CENTER::"},
+            {"name":"CDX_DC","valueFrom":"${APP_SECRET_ARN}:CDX_DC::"},
+            {"name":"CDX_API_BASE","valueFrom":"${APP_SECRET_ARN}:CDX_API_BASE::"}
         ],
         "healthCheck": {
             "command": ["CMD-SHELL","pgrep -f 'python.*main.py' || exit 1"],
@@ -603,7 +610,10 @@ cat > /tmp/td-logging.json << EOF
         "secrets": [
             {"name":"CDX_API_AUTH_TOKEN","valueFrom":"${APP_SECRET_ARN}:CDX_API_AUTH_TOKEN::"},
             {"name":"CDX_SIGNATURE_SECRET_KEY","valueFrom":"${APP_SECRET_ARN}:CDX_SIGNATURE_SECRET_KEY::"},
-            {"name":"CDX_SENTRY_DSN","valueFrom":"${APP_SECRET_ARN}:CDX_SENTRY_DSN::"}
+            {"name":"CDX_SENTRY_DSN","valueFrom":"${APP_SECRET_ARN}:CDX_SENTRY_DSN::"},
+            {"name":"CDX_DATA_CENTER","valueFrom":"${APP_SECRET_ARN}:CDX_DATA_CENTER::"},
+            {"name":"CDX_DC","valueFrom":"${APP_SECRET_ARN}:CDX_DC::"},
+            {"name":"CDX_API_BASE","valueFrom":"${APP_SECRET_ARN}:CDX_API_BASE::"}
         ],
         "healthCheck": {
             "command": ["CMD-SHELL","pgrep -f 'python.*commandlogmanager' || exit 1"],
