@@ -319,7 +319,7 @@ if [ "$EXISTING_SECRET" = "no" ]; then
         --arg sentry "$CDX_SENTRY_DSN" \
         --arg dc "$CDX_DATA_CENTER" \
         --arg api_base "$CDX_API_BASE" \
-        '{CDX_API_AUTH_TOKEN: $token, CDX_SIGNATURE_SECRET_KEY: $sig, CDX_SENTRY_DSN: $sentry, CDX_DATA_CENTER: $dc, CDX_API_BASE: $api_base}')
+        '{CDX_API_AUTH_TOKEN: $token, CDX_SIGNATURE_SECRET_KEY: $sig, CDX_SENTRY_DSN: $sentry, CDX_DATA_CENTER: $dc, CDX_DC: $dc, CDX_API_BASE: $api_base}')
 
     aws secretsmanager create-secret \
         --name "$APP_SECRET_NAME" \
@@ -565,6 +565,7 @@ cat > /tmp/td-proxyserver.json << EOF
             {"name":"CDX_SIGNATURE_SECRET_KEY","valueFrom":"${APP_SECRET_ARN}:CDX_SIGNATURE_SECRET_KEY::"},
             {"name":"CDX_SENTRY_DSN","valueFrom":"${APP_SECRET_ARN}:CDX_SENTRY_DSN::"},
             {"name":"CDX_DATA_CENTER","valueFrom":"${APP_SECRET_ARN}:CDX_DATA_CENTER::"},
+            {"name":"CDX_DC","valueFrom":"${APP_SECRET_ARN}:CDX_DC::"},
             {"name":"CDX_API_BASE","valueFrom":"${APP_SECRET_ARN}:CDX_API_BASE::"}
         ],
         "healthCheck": {
@@ -611,6 +612,7 @@ cat > /tmp/td-logging.json << EOF
             {"name":"CDX_SIGNATURE_SECRET_KEY","valueFrom":"${APP_SECRET_ARN}:CDX_SIGNATURE_SECRET_KEY::"},
             {"name":"CDX_SENTRY_DSN","valueFrom":"${APP_SECRET_ARN}:CDX_SENTRY_DSN::"},
             {"name":"CDX_DATA_CENTER","valueFrom":"${APP_SECRET_ARN}:CDX_DATA_CENTER::"},
+            {"name":"CDX_DC","valueFrom":"${APP_SECRET_ARN}:CDX_DC::"},
             {"name":"CDX_API_BASE","valueFrom":"${APP_SECRET_ARN}:CDX_API_BASE::"}
         ],
         "healthCheck": {
