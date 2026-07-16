@@ -499,7 +499,6 @@ cat > /tmp/td-proxyserver.json << EOF
         "environment": [
             {"name":"CDX_ENVIRONMENT","value":"production"},
             {"name":"CDX_DEFAULT_REGION","value":"${AWS_REGION}"},
-            {"name":"CDX_DATA_CENTER","value":"US"},
             {"name":"CDX_LOG_LEVEL","value":"DEBUG"},
             {"name":"CDX_VM_PROXY_VERSION","value":"1.0.0"},
             {"name":"CDX_VM_LOG_MANAGER_VERSION","value":"1.0.0"},
@@ -548,7 +547,6 @@ cat > /tmp/td-logging.json << EOF
         "environment": [
             {"name":"CDX_ENVIRONMENT","value":"production"},
             {"name":"CDX_DEFAULT_REGION","value":"${AWS_REGION}"},
-            {"name":"CDX_DATA_CENTER","value":"US"},
             {"name":"CDX_LOG_LEVEL","value":"INFO"},
             {"name":"CDX_VM_LOG_MANAGER_VERSION","value":"1.0.0"},
             {"name":"CDX_VM_LOGGING_S3_BUCKET","value":"${S3_BUCKET_NAME}"},
