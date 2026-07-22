@@ -1,0 +1,14 @@
+{
+    "vpc_peerings": [
+        {
+            "requester_peering_id": "pcx-09xxxxxxxxxx",
+            "accepter_vpc_id": "vpc-01xxxxxxxxx",
+            "requester_cidr": "10.1.0.0/16",
+            "requester_nat_gateway_ip": "13.1.1.1", 
+            "rds_security_groups": [
+                "sg-00xxxxxxxxx",
+                "sg-02xxxxxxxxx"
+            ]
+        }
+    ]
+}
