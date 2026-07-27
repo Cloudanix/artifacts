@@ -73,3 +73,34 @@ done
 
 echo ""
 echo "Image sync complete."
+
+# Update ECS services to use the new images
+read -p "Do you want to update ECS services with the new images? (y/n): " UPDATE_SERVICES
+if [[ "$UPDATE_SERVICES" != "y" && "$UPDATE_SERVICES" != "Y" ]]; then
+    echo "Skipping ECS service update."
+    exit 0
+fi
+
+ECS_CLUSTER="cdx-jit-vm-cluster"
+
+SERVICES=(
+    "jit-vm-proxy-sshpiper"
+    "jit-vm-proxy-vmcommandlogging"
+    "jit-vm-proxy-vmproxyserver"
+)
+
+echo ""
+echo "Updating ECS services in cluster: $ECS_CLUSTER..."
+
+for SERVICE in "${SERVICES[@]}"; do
+    echo "  Forcing new deployment for service: $SERVICE..."
+    aws ecs update-service \
+        --cluster "$ECS_CLUSTER" \
+        --service "$SERVICE" \
+        --force-new-deployment \
+        --region "$TARGET_REGION" \
+        --output text > /dev/null
+done
+
+echo ""
+echo "All services updated. New tasks will pull the latest images."
