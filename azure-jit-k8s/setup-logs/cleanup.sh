@@ -80,17 +80,18 @@ fi
 SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 SUBSCRIPTION_NAME=$(az account show --query name -o tsv)
 
-SHORT_SUB_ID=$(echo "$SUBSCRIPTION_ID" | tr -d '-' | cut -c1-11)
-STORAGE_ACCOUNT_NAME="cdxaksjitlogs${SHORT_SUB_ID}"
+# Hash of region + subscription for globally unique resource names
+RESOURCE_HASH=$(echo -n "${REGION}${SUBSCRIPTION_ID}" | md5sum | cut -c1-10 2>/dev/null || echo -n "${REGION}${SUBSCRIPTION_ID}" | md5 | cut -c1-10)
+
+STORAGE_ACCOUNT_NAME="cdxaksjitlogs${RESOURCE_HASH}"
 STORAGE_RG="cdx-aks-jit-audit-infra"
 
-EVENTHUB_NS_NAME="cdx-aks-jit-ehns-${REGION}"
+EVENTHUB_NS_NAME="cdx-aks-jit-ehns-${RESOURCE_HASH}"
 EVENTHUB_NAME="cdx-aks-jit-eh-${REGION}"
 EVENTHUB_RG="cdx-aks-jit-rg-${REGION}"
 
-FUNC_APP_NAME="cdx-aks-jit-func-${REGION}"
-FUNC_STORAGE_NAME="cdxaksjitfunc${REGION//[^a-z0-9]/}"
-FUNC_STORAGE_NAME=$(echo "$FUNC_STORAGE_NAME" | cut -c1-24)
+FUNC_APP_NAME="cdx-aks-jit-func-${RESOURCE_HASH}"
+FUNC_STORAGE_NAME="cdxaksjitfunc${RESOURCE_HASH}"
 
 DIAG_SETTING_NAME="cdx-aks-jit-audit-to-eventhub"
 

@@ -97,25 +97,29 @@ fi
 SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 SUBSCRIPTION_NAME=$(az account show --query name -o tsv)
 
+# Hash of region + subscription for globally unique resource names
+RESOURCE_HASH=$(echo -n "${REGION}${SUBSCRIPTION_ID}" | md5sum | cut -c1-10 2>/dev/null || echo -n "${REGION}${SUBSCRIPTION_ID}" | md5 | cut -c1-10)
+
 # Naming conventions (storage account names: max 24 chars, globally unique, lowercase alphanumeric)
-SHORT_SUB_ID=$(echo "$SUBSCRIPTION_ID" | tr -d '-' | cut -c1-11)
-STORAGE_ACCOUNT_NAME="cdxaksjitlogs${SHORT_SUB_ID}"
+STORAGE_ACCOUNT_NAME="cdxaksjitlogs${RESOURCE_HASH}"
 STORAGE_RG="cdx-aks-jit-audit-infra"
 STORAGE_CONTAINER="aks-audit-logs"
 
-EVENTHUB_NS_NAME="cdx-aks-jit-ehns-${REGION}"
+EVENTHUB_NS_NAME="cdx-aks-jit-ehns-${RESOURCE_HASH}"
 EVENTHUB_NAME="cdx-aks-jit-eh-${REGION}"
 EVENTHUB_RG="cdx-aks-jit-rg-${REGION}"
 EVENTHUB_SKU="Standard"
 EVENTHUB_PARTITIONS=4
 EVENTHUB_RETENTION=1  # days
 
-FUNC_APP_NAME="cdx-aks-jit-func-${REGION}"
-FUNC_STORAGE_NAME="cdxaksjitfunc${REGION//[^a-z0-9]/}"
-FUNC_STORAGE_NAME=$(echo "$FUNC_STORAGE_NAME" | cut -c1-24)
+FUNC_APP_NAME="cdx-aks-jit-func-${RESOURCE_HASH}"
+FUNC_STORAGE_NAME="cdxaksjitfunc${RESOURCE_HASH}"
 FUNC_PLAN_NAME="cdx-aks-jit-plan-${REGION}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Tags for all resources
+TAGS="project=k8sjit owner=cloudanix service=k8slogs"
 
 echo "=============================================="
 echo "AKS Audit Log Pipeline Setup (Function App)"
@@ -133,6 +137,7 @@ echo "[1/6] Creating shared infrastructure resource group..."
 az group create \
   --name "$EVENTHUB_RG" \
   --location "$REGION" \
+  --tags $TAGS \
   --output none 2>/dev/null || true
 echo "  ✓ Resource group: $EVENTHUB_RG"
 
@@ -148,6 +153,7 @@ if [[ "$STORAGE_EXISTS" == "true" ]]; then
   az group create \
     --name "$STORAGE_RG" \
     --location "$REGION" \
+    --tags $TAGS \
     --output none 2>/dev/null || true
 
   az storage account create \
@@ -158,6 +164,7 @@ if [[ "$STORAGE_EXISTS" == "true" ]]; then
     --kind StorageV2 \
     --access-tier Hot \
     --min-tls-version TLS1_2 \
+    --tags $TAGS \
     --output none
   echo "  ✓ Created storage account: $STORAGE_ACCOUNT_NAME"
 else
@@ -199,6 +206,7 @@ if [[ -z "$EH_NS_EXISTS" ]]; then
     --resource-group "$EVENTHUB_RG" \
     --location "$REGION" \
     --sku "$EVENTHUB_SKU" \
+    --tags $TAGS \
     --output none
   echo "  ✓ Created Event Hub namespace: $EVENTHUB_NS_NAME"
 else
@@ -315,6 +323,7 @@ if [[ "$FUNC_STORAGE_EXISTS" == "true" ]]; then
     --sku Standard_LRS \
     --kind StorageV2 \
     --min-tls-version TLS1_2 \
+    --tags $TAGS \
     --output none
   echo "  ✓ Created Function App storage: $FUNC_STORAGE_NAME"
 else
@@ -343,6 +352,7 @@ if [[ -z "$FUNC_EXISTS" ]]; then
     --runtime-version 3.11 \
     --functions-version 4 \
     --os-type Linux \
+    --tags $TAGS \
     --output none
   echo "  ✓ Created Function App: $FUNC_APP_NAME"
 else
