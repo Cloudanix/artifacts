@@ -48,7 +48,8 @@ cat << EOF > permission-set-policy.json
             "Resource": [
                 "arn:aws:ecs:$JIT_REGION:$JIT_ACCOUNT_ID:cluster/$JIT_CLUSTER_NAME",
                 "arn:aws:ecs:$JIT_REGION:$JIT_ACCOUNT_ID:task/$JIT_CLUSTER_NAME/*",
-                "arn:aws:ecs:$JIT_REGION:$JIT_ACCOUNT_ID:service/$JIT_CLUSTER_NAME/*"
+                "arn:aws:ecs:$JIT_REGION:$JIT_ACCOUNT_ID:service/$JIT_CLUSTER_NAME/*",
+                "arn:aws:ecs:$JIT_REGION:$JIT_ACCOUNT_ID:container-instance/$JIT_CLUSTER_NAME/*"
             ]
         }
     ]
