@@ -16,7 +16,7 @@
 set -euo pipefail
 
 VERSION="1.0.0"
-REPO_BASE="https://raw.githubusercontent.com/Cloudanix/artifacts/main"
+REPO_BASE="https://raw.githubusercontent.com/Cloudanix/artifacts/Divyansh-master-script"
 INSTALL_DIR="${CDX_INSTALL_DIR:-$HOME/.cdx-jit}"
 
 # Colors
