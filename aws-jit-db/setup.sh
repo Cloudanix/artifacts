@@ -46,16 +46,15 @@ if [[ "${1:-}" == "--cleanup" ]]; then
     echo "The following steps were completed:"
     echo ""
 
-    local scope_mode
     scope_mode=$(echo "$local_state" | jq -r '.scope_mode')
-    local steps_str="${STEPS_FOR_MODE[$scope_mode]}"
-    local all_steps=($steps_str)
+    steps_str="${STEPS_FOR_MODE[$scope_mode]}"
+    all_steps=($steps_str)
 
-    local completed_steps=()
+    completed_steps=()
     for s in "${all_steps[@]}"; do
         if is_step_complete "$STATE_FILE" "$s"; then
-            local label="${STEP_LABELS[$s]:-$s}"
-            local account="${STEP_ACCOUNT[$s]:-unknown}"
+            label="${STEP_LABELS[$s]:-$s}"
+            account="${STEP_ACCOUNT[$s]:-unknown}"
             echo "  ✓ $label (${ACCOUNT_LABELS[$account]:-$account})"
             completed_steps+=("$s")
         fi
@@ -72,13 +71,11 @@ if [[ "${1:-}" == "--cleanup" ]]; then
         exit 0
     fi
 
-    # Execute cleanup script if it exists
     if [[ -f "$SCRIPT_DIR/cleanup/cleanup.sh" ]]; then
         source "$SCRIPT_DIR/cleanup/cleanup.sh"
     else
         warn "No cleanup script found at $SCRIPT_DIR/cleanup/cleanup.sh"
     fi
-
     exit 0
 fi
 
@@ -106,9 +103,8 @@ SELECTED_SCOPE_MODE=""
 if [[ -f "$STATE_FILE" ]]; then
     local_state=$(load_state "$STATE_FILE")
     if [[ $? -eq 0 ]]; then
-        local existing_scope
         existing_scope=$(echo "$local_state" | jq -r '.scope_mode')
-        local existing_label=""
+        existing_label=""
         for i in "${!SCOPE_MODES[@]}"; do
             if [[ "${SCOPE_MODES[$i]}" == "$existing_scope" ]]; then
                 existing_label="${SCOPE_MODE_LABELS[$i]}"
@@ -177,7 +173,6 @@ TOTAL_STEPS=${#ALL_STEPS[@]}
 # =============================================================================
 
 if [[ "$RESUME_MODE" == false ]]; then
-    # Initialize state file
     init_state "$STATE_FILE" "$SETUP_TYPE" "$SELECTED_SCOPE_MODE"
 
     step "Configuration"
@@ -191,7 +186,7 @@ if [[ "$RESUME_MODE" == false ]]; then
         # Check if this field applies to the selected scope mode
         if [[ "$field_scopes" != "*" ]]; then
             IFS=',' read -ra applicable_modes <<< "$field_scopes"
-            local applies=false
+            applies=false
             for mode in "${applicable_modes[@]}"; do
                 if [[ "$mode" == "$SELECTED_SCOPE_MODE" ]]; then
                     applies=true
@@ -205,9 +200,7 @@ if [[ "$RESUME_MODE" == false ]]; then
 
         # Prompt for value with validation
         while true; do
-            local value
             value=$(prompt_with_default "$field_prompt" "$field_default")
-
             if validate "$value" "$field_rule"; then
                 set_config_value "$STATE_FILE" "$field_name" "$value"
                 break
@@ -227,7 +220,7 @@ if [[ "$RESUME_MODE" == false ]]; then
 
         if [[ "$field_scopes" != "*" ]]; then
             IFS=',' read -ra applicable_modes <<< "$field_scopes"
-            local applies=false
+            applies=false
             for mode in "${applicable_modes[@]}"; do
                 if [[ "$mode" == "$SELECTED_SCOPE_MODE" ]]; then
                     applies=true
@@ -239,11 +232,8 @@ if [[ "$RESUME_MODE" == false ]]; then
             fi
         fi
 
-        local stored_value
         stored_value=$(get_config_value "$STATE_FILE" "$field_name")
-
         if [[ "$field_sensitive" == "true" ]]; then
-            local masked
             masked=$(mask_sensitive "$stored_value")
             echo "  $field_prompt: $masked"
         else
@@ -253,10 +243,122 @@ if [[ "$RESUME_MODE" == false ]]; then
 
     echo ""
     if ! prompt_yes_no "Proceed with these values?" "y"; then
-        # Allow re-editing specific values
         info "You can re-run the script to change values. State has been saved."
         exit 0
     fi
+fi
+
+# =============================================================================
+# COLLECT CREDENTIALS FOR ALL ACCOUNTS UP FRONT
+# =============================================================================
+# We determine which unique accounts are needed for the remaining steps,
+# then ask for credentials for each one before any infrastructure work starts.
+# This way the user does all the access-portal work at the beginning.
+# =============================================================================
+
+step "Account Credentials"
+echo ""
+info "We need credentials for each AWS account involved in this setup."
+info "For each account, paste the temporary credentials from your AWS Access Portal."
+echo ""
+
+# Determine unique accounts needed for remaining (incomplete) steps
+declare -A ACCOUNT_CREDS_COLLECTED
+ACCOUNTS_NEEDED=()
+
+for step_id in "${ALL_STEPS[@]}"; do
+    # Skip already completed steps
+    if is_step_complete "$STATE_FILE" "$step_id"; then
+        continue
+    fi
+
+    step_account="${STEP_ACCOUNT[$step_id]:-unknown}"
+    if [[ -z "${ACCOUNT_CREDS_COLLECTED[$step_account]:-}" ]]; then
+        ACCOUNTS_NEEDED+=("$step_account")
+        ACCOUNT_CREDS_COLLECTED["$step_account"]="pending"
+    fi
+done
+
+if [[ ${#ACCOUNTS_NEEDED[@]} -eq 0 ]]; then
+    info "All steps already complete!"
+else
+    # Store credentials in associative arrays keyed by account context
+    declare -A CREDS_ACCESS_KEY
+    declare -A CREDS_SECRET_KEY
+    declare -A CREDS_SESSION_TOKEN
+
+    for acct_context in "${ACCOUNTS_NEEDED[@]}"; do
+        account_label="${ACCOUNT_LABELS[$acct_context]:-$acct_context}"
+        account_id_field="${ACCOUNT_ID_FIELD[$acct_context]:-}"
+        expected_id=""
+        if [[ -n "$account_id_field" ]]; then
+            expected_id=$(get_config_value "$STATE_FILE" "$account_id_field")
+        fi
+
+        # Check if current creds already match this account
+        current_id=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null) || current_id=""
+        if [[ "$current_id" == "$expected_id" && -n "$expected_id" ]]; then
+            ok "$account_label ($expected_id) — using current credentials"
+            CREDS_ACCESS_KEY["$acct_context"]="${AWS_ACCESS_KEY_ID:-__current__}"
+            CREDS_SECRET_KEY["$acct_context"]="${AWS_SECRET_ACCESS_KEY:-__current__}"
+            CREDS_SESSION_TOKEN["$acct_context"]="${AWS_SESSION_TOKEN:-}"
+            continue
+        fi
+
+        # Prompt for credentials
+        while true; do
+            echo ""
+            echo -e "${_CLR_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${_CLR_RESET}"
+            echo -e "${_CLR_BOLD}  ${account_label}${_CLR_RESET} (${expected_id})"
+            echo -e "${_CLR_DIM}  AWS Access Portal → Select this account → 'Command line or"
+            echo -e "  programmatic access' → Copy Option 1 (environment variables)${_CLR_RESET}"
+            echo -e "${_CLR_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${_CLR_RESET}"
+            echo ""
+            echo "  Paste the export commands below (press Enter twice when done):"
+            echo ""
+
+            pasted_text=""
+            empty_count=0
+            while IFS= read -r line; do
+                if [[ -z "$line" ]]; then
+                    empty_count=$((empty_count + 1))
+                    [[ $empty_count -ge 1 ]] && break
+                else
+                    empty_count=0
+                    pasted_text+="$line"$'\n'
+                fi
+            done
+
+            # Parse credentials
+            access_key=$(echo "$pasted_text" | grep 'AWS_ACCESS_KEY_ID' | sed 's/.*="\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d ' "export' | head -1)
+            secret_key=$(echo "$pasted_text" | grep 'AWS_SECRET_ACCESS_KEY' | sed 's/.*="\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d ' "export' | head -1)
+            session_token=$(echo "$pasted_text" | grep 'AWS_SESSION_TOKEN' | sed 's/.*="\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d ' "export' | head -1)
+
+            if [[ -z "$access_key" || -z "$secret_key" ]]; then
+                error "Could not parse credentials. Please paste the export lines from the portal."
+                continue
+            fi
+
+            # Verify these creds point to the right account
+            actual_id=$(AWS_ACCESS_KEY_ID="$access_key" AWS_SECRET_ACCESS_KEY="$secret_key" AWS_SESSION_TOKEN="$session_token" \
+                aws sts get-caller-identity --query "Account" --output text 2>/dev/null) || actual_id=""
+
+            if [[ "$actual_id" != "$expected_id" ]]; then
+                error "Account mismatch! Expected: $expected_id, Got: ${actual_id:-<auth failed>}"
+                error "Please paste credentials for the correct account."
+                continue
+            fi
+
+            ok "$account_label ($expected_id) — verified ✓"
+            CREDS_ACCESS_KEY["$acct_context"]="$access_key"
+            CREDS_SECRET_KEY["$acct_context"]="$secret_key"
+            CREDS_SESSION_TOKEN["$acct_context"]="$session_token"
+            break
+        done
+    done
+
+    echo ""
+    ok "All account credentials collected and verified"
 fi
 
 # =============================================================================
@@ -273,59 +375,28 @@ STEP_NUM=0
 for step_id in "${ALL_STEPS[@]}"; do
     STEP_NUM=$((STEP_NUM + 1))
 
-    # Skip completed steps in resume mode
+    # Skip completed steps
     if is_step_complete "$STATE_FILE" "$step_id"; then
         info "[Step ${STEP_NUM}/${TOTAL_STEPS}] ${STEP_LABELS[$step_id]:-$step_id} — already complete, skipping"
         continue
     fi
 
-    local step_label="${STEP_LABELS[$step_id]:-$step_id}"
-    local step_account="${STEP_ACCOUNT[$step_id]:-unknown}"
+    step_label="${STEP_LABELS[$step_id]:-$step_id}"
+    step_account="${STEP_ACCOUNT[$step_id]:-unknown}"
 
-    # Account context switch check
+    # Switch credentials if account context changed
     if [[ "$step_account" != "$CURRENT_ACCOUNT" ]]; then
-        local account_label="${ACCOUNT_LABELS[$step_account]:-$step_account}"
-        local account_id_field="${ACCOUNT_ID_FIELD[$step_account]:-}"
-        local expected_account_id=""
+        account_label="${ACCOUNT_LABELS[$step_account]:-$step_account}"
 
-        if [[ -n "$account_id_field" ]]; then
-            expected_account_id=$(get_config_value "$STATE_FILE" "$account_id_field")
-        fi
-
-        show_account_switch_banner "$account_label" "$expected_account_id" "$step_label"
-
-        # Prompt for confirmation and verify credentials
-        if ! prompt_yes_no "Have you switched to the correct account?" "y"; then
-            warn "Please switch accounts and re-run the script. Progress has been saved."
-            exit 0
-        fi
-
-        # Verify account credentials if AWS
-        if [[ -n "$expected_account_id" ]] && [[ "$expected_account_id" != "" ]]; then
-            if [[ "$step_account" == *"subscription"* ]]; then
-                # Azure verification
-                local actual_id
-                actual_id=$(verify_azure_subscription "$expected_account_id") && true
-                if [[ $? -ne 0 ]] && [[ -n "$actual_id" ]]; then
-                    error "Account mismatch!"
-                    error "  Expected: $expected_account_id"
-                    error "  Actual:   $actual_id"
-                    warn "Please switch to the correct account and re-run."
-                    exit 1
-                fi
-            else
-                # AWS verification
-                local actual_id
-                actual_id=$(verify_aws_account "$expected_account_id") && true
-                if [[ $? -ne 0 ]] && [[ -n "$actual_id" ]]; then
-                    error "Account mismatch!"
-                    error "  Expected: $expected_account_id"
-                    error "  Actual:   $actual_id"
-                    warn "Please switch to the correct account and re-run."
-                    exit 1
-                fi
-            fi
-            ok "Account verified: $expected_account_id"
+        # Apply stored credentials for this account
+        if [[ "${CREDS_ACCESS_KEY[$step_account]:-}" == "__current__" ]]; then
+            # Using whatever was already set (current env)
+            info "Using current credentials for $account_label"
+        elif [[ -n "${CREDS_ACCESS_KEY[$step_account]:-}" ]]; then
+            export AWS_ACCESS_KEY_ID="${CREDS_ACCESS_KEY[$step_account]}"
+            export AWS_SECRET_ACCESS_KEY="${CREDS_SECRET_KEY[$step_account]}"
+            export AWS_SESSION_TOKEN="${CREDS_SESSION_TOKEN[$step_account]}"
+            info "Switched to: $account_label"
         fi
 
         CURRENT_ACCOUNT="$step_account"
@@ -335,21 +406,19 @@ for step_id in "${ALL_STEPS[@]}"; do
     show_progress "$STEP_NUM" "$TOTAL_STEPS" "$step_label"
 
     # Build environment for step script
-    local step_script="$SCRIPT_DIR/steps/${step_id}.sh"
+    step_script="$SCRIPT_DIR/steps/${step_id}.sh"
     if [[ ! -f "$step_script" ]]; then
         error "Step script not found: $step_script"
         exit 1
     fi
 
     # Export all config values as environment variables
-    local config_json
     config_json=$(jq -r '.config' "$STATE_FILE")
     while IFS='=' read -r key value; do
         export "$key=$value"
     done < <(echo "$config_json" | jq -r 'to_entries[] | "\(.key)=\(.value)"')
 
     # Export outputs from all previous completed steps
-    local steps_json
     steps_json=$(jq -r '.steps' "$STATE_FILE")
     while IFS='=' read -r key value; do
         if [[ -n "$key" ]] && [[ "$key" != "null" ]]; then
@@ -358,8 +427,8 @@ for step_id in "${ALL_STEPS[@]}"; do
     done < <(echo "$steps_json" | jq -r '[.[] | select(.status == "complete") | .outputs // {} | to_entries[]] | .[] | "\(.key)=\(.value)"')
 
     # Execute step script and capture output
-    local step_output
-    local step_exit_code=0
+    step_output=""
+    step_exit_code=0
     step_output=$(bash "$step_script" 2>&1) || step_exit_code=$?
 
     # Display step output (non-OUTPUT lines)
@@ -372,9 +441,7 @@ for step_id in "${ALL_STEPS[@]}"; do
     fi
 
     # Parse OUTPUT lines and save to state
-    local outputs_json
     outputs_json=$(parse_step_output "$step_output")
-
     mark_step_complete "$STATE_FILE" "$step_id" "$outputs_json"
     ok "$step_label — complete"
 done

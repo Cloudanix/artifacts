@@ -317,6 +317,118 @@ get_config_value() {
 # ACCOUNT VERIFICATION FUNCTIONS
 # =============================================================================
 
+# prompt_aws_credentials ACCOUNT_LABEL EXPECTED_ACCOUNT_ID
+#   Prompts the user to paste temporary AWS credentials from the access portal.
+#   Parses the pasted text for AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+#   and AWS_SESSION_TOKEN, exports them, then verifies the account ID.
+#   Returns 0 on success, 1 on failure.
+prompt_aws_credentials() {
+    local account_label="$1"
+    local expected_id="$2"
+
+    echo ""
+    echo -e "${_CLR_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${_CLR_RESET}"
+    echo -e "${_CLR_BOLD}  Paste credentials for: ${account_label} (${expected_id})${_CLR_RESET}"
+    echo -e "${_CLR_DIM}  Go to AWS Access Portal → Select account → 'Command line or"
+    echo -e "  programmatic access' → Copy Option 1 (environment variables)${_CLR_RESET}"
+    echo -e "${_CLR_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${_CLR_RESET}"
+    echo ""
+    echo -e "  Paste the export commands below (press Enter twice when done):"
+    echo ""
+
+    local pasted_text=""
+    local empty_lines=0
+
+    while IFS= read -r line; do
+        if [[ -z "$line" ]]; then
+            empty_lines=$((empty_lines + 1))
+            if [[ $empty_lines -ge 1 ]]; then
+                break
+            fi
+        else
+            empty_lines=0
+            pasted_text+="$line"$'\n'
+        fi
+    done
+
+    # Parse credentials from pasted text
+    local access_key secret_key session_token
+
+    access_key=$(echo "$pasted_text" | grep -oP '(?<=AWS_ACCESS_KEY_ID=")[^"]+' 2>/dev/null || \
+                 echo "$pasted_text" | grep 'AWS_ACCESS_KEY_ID' | sed 's/.*="\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d ' "' | head -1)
+
+    secret_key=$(echo "$pasted_text" | grep -oP '(?<=AWS_SECRET_ACCESS_KEY=")[^"]+' 2>/dev/null || \
+                 echo "$pasted_text" | grep 'AWS_SECRET_ACCESS_KEY' | sed 's/.*="\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d ' "' | head -1)
+
+    session_token=$(echo "$pasted_text" | grep -oP '(?<=AWS_SESSION_TOKEN=")[^"]+' 2>/dev/null || \
+                    echo "$pasted_text" | grep 'AWS_SESSION_TOKEN' | sed 's/.*="\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d ' "' | head -1)
+
+    if [[ -z "$access_key" || -z "$secret_key" ]]; then
+        error "Could not parse AWS credentials from pasted text."
+        error "Expected format:"
+        error '  export AWS_ACCESS_KEY_ID="AKIA..."'
+        error '  export AWS_SECRET_ACCESS_KEY="..."'
+        error '  export AWS_SESSION_TOKEN="..."'
+        return 1
+    fi
+
+    # Export the credentials
+    export AWS_ACCESS_KEY_ID="$access_key"
+    export AWS_SECRET_ACCESS_KEY="$secret_key"
+    export AWS_SESSION_TOKEN="${session_token:-}"
+
+    # Verify we're in the right account
+    local actual_id
+    actual_id=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null) || {
+        error "Credentials invalid — could not call AWS STS."
+        return 1
+    }
+
+    if [[ "$actual_id" != "$expected_id" ]]; then
+        error "Account mismatch!"
+        error "  Expected: $expected_id ($account_label)"
+        error "  Got:      $actual_id"
+        error "  Please paste credentials for the correct account."
+        return 1
+    fi
+
+    ok "Credentials verified: $account_label ($actual_id)"
+    return 0
+}
+
+# switch_aws_account EXPECTED_ACCOUNT_ID ACCOUNT_LABEL
+#   High-level account switch handler.
+#   Checks if already in the right account, otherwise prompts for credentials.
+#   Retries up to 3 times on failure.
+switch_aws_account() {
+    local expected_id="$1"
+    local account_label="${2:-Account $expected_id}"
+
+    # Check if we're already in the right account
+    local current_id
+    current_id=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null) || current_id=""
+
+    if [[ "$current_id" == "$expected_id" ]]; then
+        ok "Already in account: $account_label ($expected_id)"
+        return 0
+    fi
+
+    # Prompt for credentials (retry up to 3 times)
+    local attempts=0
+    while [[ $attempts -lt 3 ]]; do
+        if prompt_aws_credentials "$account_label" "$expected_id"; then
+            return 0
+        fi
+        attempts=$((attempts + 1))
+        if [[ $attempts -lt 3 ]]; then
+            warn "Retry $attempts/3..."
+        fi
+    done
+
+    error "Failed to switch to $account_label after 3 attempts."
+    return 1
+}
+
 # verify_aws_account EXPECTED_ACCOUNT_ID
 #   Returns 0 if current AWS account matches expected, 1 otherwise
 #   Outputs actual account ID on mismatch
@@ -592,6 +704,7 @@ export -f prompt_with_default prompt_yes_no prompt_selection
 export -f init_state save_state load_state mark_step_complete is_step_complete
 export -f get_step_output set_config_value get_config_value
 export -f verify_aws_account verify_azure_subscription
+export -f prompt_aws_credentials switch_aws_account
 export -f validate_aws_account_id validate_azure_subscription_id validate_cidr
 export -f validate_arn validate_region validate_alphanumeric_dash
 export -f validate_semver_or_latest validate_boolean validate_nonempty validate
