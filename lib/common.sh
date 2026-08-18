@@ -131,8 +131,9 @@ prompt_yes_no() {
 }
 
 # prompt_selection PROMPT OPTIONS_ARRAY_NAME
-#   Displays numbered menu, returns selected value
+#   Displays numbered menu, returns selected value via global CDX_SELECTED
 #   Retries up to 3 times on invalid input, then exits
+#   NOTE: Sets CDX_SELECTED global variable (not stdout) to avoid capture issues
 prompt_selection() {
     local prompt="$1"
     shift
@@ -140,21 +141,21 @@ prompt_selection() {
     local count=${#options[@]}
     local attempts=0
 
-    echo "" >&2
-    echo "$prompt" >&2
-    echo "" >&2
+    echo ""
+    echo "$prompt"
+    echo ""
     for i in "${!options[@]}"; do
-        echo "  $((i + 1))) ${options[$i]}" >&2
+        echo "  $((i + 1))) ${options[$i]}"
     done
-    echo "" >&2
+    echo ""
 
     while true; do
         local choice
-        read -rp "Select option [1-$count]: " choice < /dev/tty
+        read -rp "Select option [1-$count]: " choice
 
         # Validate: must be a number in range
         if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le "$count" ]]; then
-            echo "${options[$((choice - 1))]}"
+            CDX_SELECTED="${options[$((choice - 1))]}"
             return 0
         fi
 
@@ -163,7 +164,7 @@ prompt_selection() {
             error "Too many invalid attempts. Please enter a number between 1 and $count."
             return 1
         fi
-        warn "Invalid selection. Please enter a number between 1 and $count." >&2
+        warn "Invalid selection. Please enter a number between 1 and $count."
     done
 }
 

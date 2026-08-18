@@ -144,14 +144,14 @@ fi
 # =============================================================================
 
 if [[ -z "$SELECTED_SCOPE_MODE" ]]; then
-    SELECTED_SCOPE_MODE=$(prompt_selection "Select deployment scope:" "${SCOPE_MODE_LABELS[@]}") || {
+    prompt_selection "Select deployment scope:" "${SCOPE_MODE_LABELS[@]}" || {
         error "Failed to select scope mode."
         exit 1
     }
 
     # Map label back to mode identifier
     for i in "${!SCOPE_MODE_LABELS[@]}"; do
-        if [[ "${SCOPE_MODE_LABELS[$i]}" == "$SELECTED_SCOPE_MODE" ]]; then
+        if [[ "${SCOPE_MODE_LABELS[$i]}" == "$CDX_SELECTED" ]]; then
             SELECTED_SCOPE_MODE="${SCOPE_MODES[$i]}"
             break
         fi
