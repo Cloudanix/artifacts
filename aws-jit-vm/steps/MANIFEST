@@ -1,0 +1,7 @@
+01-create-permission-set.sh
+02-sync-ecr.sh
+03-install-workloads-existing-vpc.sh
+03-install-workloads.sh
+04-setup-vpc-peering.sh
+05-accept-peering.sh
+06-store-ssh-key.sh

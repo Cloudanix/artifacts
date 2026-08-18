@@ -1,0 +1,10 @@
+01-sync-ecr.sh
+02-install-workloads-existing-vpc.sh
+02-install-workloads-new-vpc.sh
+02-install-workloads-same-account.sh
+03-setup-vpc-peering.sh
+04-accept-peering.sh
+05-extend-role-permissions.sh
+06-extend-role-trust.sh
+07-update-assume-role.sh
+08-create-permission-set.sh

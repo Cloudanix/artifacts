@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Step: Sync ECR Images
+# =============================================================================
+# Pulls container images from the Cloudanix source ECR and pushes them to the
+# customer's target ECR. Creates ECR repositories if they don't exist.
+#
+# Required env vars:
+#   AWS_REGION, IMAGE_TAG, ENABLE_DAM
+#
+# Outputs:
+#   OUTPUT:ECR_SYNCED=true
+# =============================================================================
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$(cd "$SCRIPT_DIR/../../lib" && pwd)"
+source "$LIB_DIR/common.sh"
+
+# Validate required env vars
+require_env AWS_REGION IMAGE_TAG ENABLE_DAM || exit 1
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+SOURCE_ACCOUNT_ID="774118602354"
+SOURCE_REGION="us-east-2"
+TARGET_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
+TARGET_REGION="$AWS_REGION"
+PLATFORM="linux/amd64"
+
+info "Source ECR: $SOURCE_ACCOUNT_ID ($SOURCE_REGION)"
+info "Target ECR: $TARGET_ACCOUNT_ID ($TARGET_REGION)"
+info "Image tag: $IMAGE_TAG"
+info "DAM enabled: $ENABLE_DAM"
+
+# =============================================================================
+# DETERMINE REPOSITORIES
+# =============================================================================
+
+REPOSITORIES=(
+    "cloudanix/ecr-aws-jit-proxy-sql"
+    "cloudanix/ecr-aws-jit-query-logging"
+    "cloudanix/ecr-aws-jit-proxy-server"
+)
+
+if [[ "$ENABLE_DAM" == "true" ]]; then
+    REPOSITORIES+=(
+        "cloudanix/ecr-aws-jit-dam-server"
+        "cloudanix/ecr-aws-jit-postgresql"
+    )
+fi
+
+# =============================================================================
+# AUTHENTICATE TO ECR
+# =============================================================================
+
+info "Authenticating to source ECR..."
+aws ecr get-login-password --region "$SOURCE_REGION" | \
+    docker login --username AWS --password-stdin \
+    "$SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com" 2>/dev/null
+
+info "Authenticating to target ECR..."
+aws ecr get-login-password --region "$TARGET_REGION" | \
+    docker login --username AWS --password-stdin \
+    "$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com" 2>/dev/null
+
+# =============================================================================
+# SYNC EACH REPOSITORY (idempotent)
+# =============================================================================
+
+for REPO in "${REPOSITORIES[@]}"; do
+    info "Processing: $REPO"
+
+    # Check if repo exists, create if not (idempotent)
+    if aws ecr describe-repositories --region "$TARGET_REGION" \
+        --repository-names "$REPO" > /dev/null 2>&1; then
+        ok "  Repository exists: $REPO"
+    else
+        aws ecr create-repository --region "$TARGET_REGION" \
+            --repository-name "$REPO" > /dev/null
+        ok "  Repository created: $REPO"
+    fi
+
+    # Pull from source
+    info "  Pulling $SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/$REPO:$IMAGE_TAG"
+    docker pull --platform "$PLATFORM" \
+        "$SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/$REPO:$IMAGE_TAG" 2>/dev/null
+
+    # Tag for target
+    docker tag \
+        "$SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/$REPO:$IMAGE_TAG" \
+        "$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com/$REPO:$IMAGE_TAG"
+
+    docker tag \
+        "$SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/$REPO:$IMAGE_TAG" \
+        "$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com/$REPO:latest"
+
+    # Push to target
+    info "  Pushing to target..."
+    docker push "$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com/$REPO:$IMAGE_TAG" 2>/dev/null
+    docker push "$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com/$REPO:latest" 2>/dev/null
+
+    ok "  Synced: $REPO"
+done
+
+# =============================================================================
+# OUTPUT
+# =============================================================================
+
+ok "All repositories synced successfully"
+echo "OUTPUT:ECR_SYNCED=true"
+echo "OUTPUT:TARGET_ECR_PREFIX=${TARGET_ACCOUNT_ID}.dkr.ecr.${TARGET_REGION}.amazonaws.com"
