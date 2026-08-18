@@ -140,17 +140,17 @@ prompt_selection() {
     local count=${#options[@]}
     local attempts=0
 
-    echo ""
-    echo "$prompt"
-    echo ""
+    echo "" >&2
+    echo "$prompt" >&2
+    echo "" >&2
     for i in "${!options[@]}"; do
-        echo "  $((i + 1))) ${options[$i]}"
+        echo "  $((i + 1))) ${options[$i]}" >&2
     done
-    echo ""
+    echo "" >&2
 
     while true; do
         local choice
-        read -rp "Select option [1-$count]: " choice
+        read -rp "Select option [1-$count]: " choice < /dev/tty
 
         # Validate: must be a number in range
         if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le "$count" ]]; then
@@ -163,7 +163,7 @@ prompt_selection() {
             error "Too many invalid attempts. Please enter a number between 1 and $count."
             return 1
         fi
-        warn "Invalid selection. Please enter a number between 1 and $count."
+        warn "Invalid selection. Please enter a number between 1 and $count." >&2
     done
 }
 
