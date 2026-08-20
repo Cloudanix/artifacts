@@ -83,23 +83,15 @@ for REPO in "${REPOSITORIES[@]}"; do
         ok "  Repository created: $REPO"
     fi
 
-    # --- Idempotent check: skip if target already has the source digest ---
-    SOURCE_DIGEST=$(aws ecr describe-images --region "$SOURCE_REGION" \
-        --registry-id "$SOURCE_ACCOUNT_ID" \
+    # --- Idempotent check: skip if target already has this tag ---
+    TARGET_DIGEST=$(aws ecr describe-images --region "$TARGET_REGION" \
         --repository-name "$REPO" \
         --image-ids imageTag="$IMAGE_TAG" \
         --query "imageDetails[0].imageDigest" --output text 2>/dev/null || echo "")
 
-    if [[ -n "$SOURCE_DIGEST" && "$SOURCE_DIGEST" != "None" ]]; then
-        TARGET_DIGEST=$(aws ecr describe-images --region "$TARGET_REGION" \
-            --repository-name "$REPO" \
-            --image-ids imageTag="$IMAGE_TAG" \
-            --query "imageDetails[0].imageDigest" --output text 2>/dev/null || echo "")
-
-        if [[ "$SOURCE_DIGEST" == "$TARGET_DIGEST" ]]; then
-            ok "  Already synced (digest match): $REPO"
-            continue
-        fi
+    if [[ -n "$TARGET_DIGEST" && "$TARGET_DIGEST" != "None" ]]; then
+        ok "  Already exists in target ECR: $REPO (skipping)"
+        continue
     fi
 
     # --- Pull from source ---
@@ -130,8 +122,8 @@ for REPO in "${REPOSITORIES[@]}"; do
 
     # --- Clean up local images to free disk space ---
     # Critical for constrained environments like CloudShell (1GB disk)
-    docker rmi "$SOURCE_IMAGE" "$TARGET_IMAGE_TAG" "$TARGET_IMAGE_LATEST" 2>/dev/null || true
-    docker image prune -f > /dev/null 2>&1 || true
+    docker rmi -f $(docker images -q) 2>/dev/null || true
+    docker system prune -af > /dev/null 2>&1 || true
 done
 
 # =============================================================================
