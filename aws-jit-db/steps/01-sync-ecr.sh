@@ -86,7 +86,10 @@ for REPO in "${REPOSITORIES[@]}"; do
     # Pull from source
     info "  Pulling $SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/$REPO:$IMAGE_TAG"
     docker pull --platform "$PLATFORM" \
-        "$SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/$REPO:$IMAGE_TAG" 2>/dev/null
+        "$SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/$REPO:$IMAGE_TAG" || {
+        error "  Failed to pull image. Ensure source ECR grants access to account $TARGET_ACCOUNT_ID"
+        exit 1
+    }
 
     # Tag for target
     docker tag \
@@ -99,8 +102,12 @@ for REPO in "${REPOSITORIES[@]}"; do
 
     # Push to target
     info "  Pushing to target..."
-    docker push "$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com/$REPO:$IMAGE_TAG" 2>/dev/null
-    docker push "$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com/$REPO:latest" 2>/dev/null
+    docker push "$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com/$REPO:$IMAGE_TAG" || {
+        error "  Failed to push $IMAGE_TAG tag"; exit 1
+    }
+    docker push "$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com/$REPO:latest" || {
+        error "  Failed to push latest tag"; exit 1
+    }
 
     ok "  Synced: $REPO"
 done

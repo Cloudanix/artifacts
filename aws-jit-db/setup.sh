@@ -175,6 +175,10 @@ TOTAL_STEPS=${#ALL_STEPS[@]}
 if [[ "$RESUME_MODE" == false ]]; then
     init_state "$STATE_FILE" "$SETUP_TYPE" "$SELECTED_SCOPE_MODE"
 
+    # Auto-detect values for smart defaults
+    _CURRENT_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null || echo "")
+    _SSO_INSTANCE_ARN=$(aws sso-admin list-instances --query "Instances[0].InstanceArn" --output text 2>/dev/null || echo "")
+
     step "Configuration"
     echo ""
     info "Please provide the following values. Press Enter to accept defaults."
@@ -196,6 +200,15 @@ if [[ "$RESUME_MODE" == false ]]; then
             if [[ "$applies" == false ]]; then
                 continue
             fi
+        fi
+
+        # Resolve auto-defaults
+        if [[ "$field_default" == "__AUTO_SSO__" ]]; then
+            field_default="${_SSO_INSTANCE_ARN:-}"
+        elif [[ "$field_default" == "__AUTO_BUCKET__" ]]; then
+            # Use JIT account ID if already collected, otherwise current account
+            _jit_id=$(get_config_value "$STATE_FILE" "JIT_ACCOUNT_ID" 2>/dev/null || echo "")
+            field_default="cdx-jit-db-logs-${_jit_id:-${_CURRENT_ACCOUNT_ID:-unknown}}"
         fi
 
         # Prompt for value with validation
@@ -246,6 +259,56 @@ if [[ "$RESUME_MODE" == false ]]; then
         info "You can re-run the script to change values. State has been saved."
         exit 0
     fi
+fi
+
+# =============================================================================
+# RE-PROMPT MISSING CONFIG ON RESUME
+# =============================================================================
+
+if [[ "$RESUME_MODE" == true ]]; then
+    _CURRENT_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null || echo "")
+    _SSO_INSTANCE_ARN=$(aws sso-admin list-instances --query "Instances[0].InstanceArn" --output text 2>/dev/null || echo "")
+
+    MISSING_CONFIG=false
+    for field_def in "${CONFIG_FIELDS[@]}"; do
+        IFS='|' read -r field_name field_rule field_default field_prompt field_scopes field_sensitive <<< "$field_def"
+
+        if [[ "$field_scopes" != "*" ]]; then
+            IFS=',' read -ra applicable_modes <<< "$field_scopes"
+            applies=false
+            for mode in "${applicable_modes[@]}"; do
+                if [[ "$mode" == "$SELECTED_SCOPE_MODE" ]]; then applies=true; break; fi
+            done
+            [[ "$applies" == false ]] && continue
+        fi
+
+        stored=$(get_config_value "$STATE_FILE" "$field_name")
+        if [[ -z "$stored" ]]; then
+            if [[ "$MISSING_CONFIG" == false ]]; then
+                echo ""
+                info "Some configuration values are missing. Please provide them:"
+                echo ""
+                MISSING_CONFIG=true
+            fi
+
+            if [[ "$field_default" == "__AUTO_SSO__" ]]; then
+                field_default="${_SSO_INSTANCE_ARN:-}"
+            elif [[ "$field_default" == "__AUTO_BUCKET__" ]]; then
+                _jit_id=$(get_config_value "$STATE_FILE" "JIT_ACCOUNT_ID" 2>/dev/null || echo "")
+                field_default="cdx-jit-db-logs-${_jit_id:-${_CURRENT_ACCOUNT_ID:-unknown}}"
+            fi
+
+            while true; do
+                value=$(prompt_with_default "$field_prompt" "$field_default")
+                if validate "$value" "$field_rule"; then
+                    set_config_value "$STATE_FILE" "$field_name" "$value"
+                    break
+                else
+                    warn "Invalid format. Expected: $field_rule"
+                fi
+            done
+        fi
+    done
 fi
 
 # =============================================================================
@@ -329,10 +392,10 @@ else
                 fi
             done
 
-            # Parse credentials
-            access_key=$(echo "$pasted_text" | grep 'AWS_ACCESS_KEY_ID' | sed 's/.*="\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d ' "export' | head -1)
-            secret_key=$(echo "$pasted_text" | grep 'AWS_SECRET_ACCESS_KEY' | sed 's/.*="\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d ' "export' | head -1)
-            session_token=$(echo "$pasted_text" | grep 'AWS_SESSION_TOKEN' | sed 's/.*="\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d ' "export' | head -1)
+            # Parse credentials — extract value after the = sign, strip quotes
+            access_key=$(echo "$pasted_text" | grep 'AWS_ACCESS_KEY_ID' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
+            secret_key=$(echo "$pasted_text" | grep 'AWS_SECRET_ACCESS_KEY' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
+            session_token=$(echo "$pasted_text" | grep 'AWS_SESSION_TOKEN' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
 
             if [[ -z "$access_key" || -z "$secret_key" ]]; then
                 error "Could not parse credentials. Please paste the export lines from the portal."
@@ -340,8 +403,23 @@ else
             fi
 
             # Verify these creds point to the right account
-            actual_id=$(AWS_ACCESS_KEY_ID="$access_key" AWS_SECRET_ACCESS_KEY="$secret_key" AWS_SESSION_TOKEN="$session_token" \
-                aws sts get-caller-identity --query "Account" --output text 2>/dev/null) || actual_id=""
+            # CloudShell uses container credentials that override env vars,
+            # so we must disable the metadata endpoint to force env var usage
+            _ORIG_AK="${AWS_ACCESS_KEY_ID:-}"
+            _ORIG_SK="${AWS_SECRET_ACCESS_KEY:-}"
+            _ORIG_ST="${AWS_SESSION_TOKEN:-}"
+            export AWS_ACCESS_KEY_ID="$access_key"
+            export AWS_SECRET_ACCESS_KEY="$secret_key"
+            export AWS_SESSION_TOKEN="$session_token"
+            export AWS_EC2_METADATA_DISABLED=true
+
+            actual_id=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null) || actual_id=""
+
+            # Restore original creds
+            export AWS_ACCESS_KEY_ID="$_ORIG_AK"
+            export AWS_SECRET_ACCESS_KEY="$_ORIG_SK"
+            export AWS_SESSION_TOKEN="$_ORIG_ST"
+            unset AWS_EC2_METADATA_DISABLED
 
             if [[ "$actual_id" != "$expected_id" ]]; then
                 error "Account mismatch! Expected: $expected_id, Got: ${actual_id:-<auth failed>}"
@@ -391,11 +469,13 @@ for step_id in "${ALL_STEPS[@]}"; do
         # Apply stored credentials for this account
         if [[ "${CREDS_ACCESS_KEY[$step_account]:-}" == "__current__" ]]; then
             # Using whatever was already set (current env)
+            unset AWS_EC2_METADATA_DISABLED 2>/dev/null || true
             info "Using current credentials for $account_label"
         elif [[ -n "${CREDS_ACCESS_KEY[$step_account]:-}" ]]; then
             export AWS_ACCESS_KEY_ID="${CREDS_ACCESS_KEY[$step_account]}"
             export AWS_SECRET_ACCESS_KEY="${CREDS_SECRET_KEY[$step_account]}"
             export AWS_SESSION_TOKEN="${CREDS_SESSION_TOKEN[$step_account]}"
+            export AWS_EC2_METADATA_DISABLED=true
             info "Switched to: $account_label"
         fi
 
