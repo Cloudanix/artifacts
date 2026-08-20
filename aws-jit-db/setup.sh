@@ -515,13 +515,12 @@ for step_id in "${ALL_STEPS[@]}"; do
         fi
     done < <(echo "$steps_json" | jq -r '[.[] | select(.status == "complete") | .outputs // {} | to_entries[]] | .[] | "\(.key)=\(.value)"')
 
-    # Execute step script and capture output
-    step_output=""
+    # Execute step script — stream output in real-time using tee
+    step_output_file="/tmp/cdx-step-output-$$.txt"
     step_exit_code=0
-    step_output=$(bash "$step_script" 2>&1) || step_exit_code=$?
-
-    # Display step output (non-OUTPUT lines)
-    echo "$step_output" | grep -v "^OUTPUT:" || true
+    bash "$step_script" 2>&1 | tee "$step_output_file" || step_exit_code=$?
+    step_output=$(cat "$step_output_file")
+    rm -f "$step_output_file"
 
     if [[ $step_exit_code -ne 0 ]]; then
         error "Step '$step_label' failed with exit code $step_exit_code"

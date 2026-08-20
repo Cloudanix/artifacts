@@ -83,33 +83,55 @@ for REPO in "${REPOSITORIES[@]}"; do
         ok "  Repository created: $REPO"
     fi
 
-    # Pull from source
-    info "  Pulling $SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/$REPO:$IMAGE_TAG"
-    docker pull --platform "$PLATFORM" \
-        "$SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/$REPO:$IMAGE_TAG" || {
+    # --- Idempotent check: skip if target already has the source digest ---
+    SOURCE_DIGEST=$(aws ecr describe-images --region "$SOURCE_REGION" \
+        --registry-id "$SOURCE_ACCOUNT_ID" \
+        --repository-name "$REPO" \
+        --image-ids imageTag="$IMAGE_TAG" \
+        --query "imageDetails[0].imageDigest" --output text 2>/dev/null || echo "")
+
+    if [[ -n "$SOURCE_DIGEST" && "$SOURCE_DIGEST" != "None" ]]; then
+        TARGET_DIGEST=$(aws ecr describe-images --region "$TARGET_REGION" \
+            --repository-name "$REPO" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --query "imageDetails[0].imageDigest" --output text 2>/dev/null || echo "")
+
+        if [[ "$SOURCE_DIGEST" == "$TARGET_DIGEST" ]]; then
+            ok "  Already synced (digest match): $REPO"
+            continue
+        fi
+    fi
+
+    # --- Pull from source ---
+    SOURCE_IMAGE="$SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/$REPO:$IMAGE_TAG"
+    TARGET_IMAGE_TAG="$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com/$REPO:$IMAGE_TAG"
+    TARGET_IMAGE_LATEST="$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com/$REPO:latest"
+
+    info "  Pulling $SOURCE_IMAGE"
+    docker pull --platform "$PLATFORM" "$SOURCE_IMAGE" || {
         error "  Failed to pull image. Ensure source ECR grants access to account $TARGET_ACCOUNT_ID"
         exit 1
     }
 
     # Tag for target
-    docker tag \
-        "$SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/$REPO:$IMAGE_TAG" \
-        "$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com/$REPO:$IMAGE_TAG"
-
-    docker tag \
-        "$SOURCE_ACCOUNT_ID.dkr.ecr.$SOURCE_REGION.amazonaws.com/$REPO:$IMAGE_TAG" \
-        "$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com/$REPO:latest"
+    docker tag "$SOURCE_IMAGE" "$TARGET_IMAGE_TAG"
+    docker tag "$SOURCE_IMAGE" "$TARGET_IMAGE_LATEST"
 
     # Push to target
     info "  Pushing to target..."
-    docker push "$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com/$REPO:$IMAGE_TAG" || {
+    docker push "$TARGET_IMAGE_TAG" || {
         error "  Failed to push $IMAGE_TAG tag"; exit 1
     }
-    docker push "$TARGET_ACCOUNT_ID.dkr.ecr.$TARGET_REGION.amazonaws.com/$REPO:latest" || {
+    docker push "$TARGET_IMAGE_LATEST" || {
         error "  Failed to push latest tag"; exit 1
     }
 
     ok "  Synced: $REPO"
+
+    # --- Clean up local images to free disk space ---
+    # Critical for constrained environments like CloudShell (1GB disk)
+    docker rmi "$SOURCE_IMAGE" "$TARGET_IMAGE_TAG" "$TARGET_IMAGE_LATEST" 2>/dev/null || true
+    docker image prune -f > /dev/null 2>&1 || true
 done
 
 # =============================================================================
