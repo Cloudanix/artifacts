@@ -403,22 +403,27 @@ else
             fi
 
             # Verify these creds point to the right account
-            # CloudShell uses container credentials that override env vars,
-            # so we must disable the metadata endpoint to force env var usage
+            # CloudShell uses container credentials (AWS_CONTAINER_CREDENTIALS_RELATIVE_URI)
+            # which override env vars. We must unset it to force env var usage.
             _ORIG_AK="${AWS_ACCESS_KEY_ID:-}"
             _ORIG_SK="${AWS_SECRET_ACCESS_KEY:-}"
             _ORIG_ST="${AWS_SESSION_TOKEN:-}"
+            _ORIG_CONTAINER_CREDS="${AWS_CONTAINER_CREDENTIALS_RELATIVE_URI:-}"
             export AWS_ACCESS_KEY_ID="$access_key"
             export AWS_SECRET_ACCESS_KEY="$secret_key"
             export AWS_SESSION_TOKEN="$session_token"
             export AWS_EC2_METADATA_DISABLED=true
+            unset AWS_CONTAINER_CREDENTIALS_RELATIVE_URI 2>/dev/null || true
 
             actual_id=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null) || actual_id=""
 
-            # Restore original creds
+            # Restore original creds and container URI
             export AWS_ACCESS_KEY_ID="$_ORIG_AK"
             export AWS_SECRET_ACCESS_KEY="$_ORIG_SK"
             export AWS_SESSION_TOKEN="$_ORIG_ST"
+            if [[ -n "$_ORIG_CONTAINER_CREDS" ]]; then
+                export AWS_CONTAINER_CREDENTIALS_RELATIVE_URI="$_ORIG_CONTAINER_CREDS"
+            fi
             unset AWS_EC2_METADATA_DISABLED
 
             if [[ "$actual_id" != "$expected_id" ]]; then
@@ -468,7 +473,10 @@ for step_id in "${ALL_STEPS[@]}"; do
 
         # Apply stored credentials for this account
         if [[ "${CREDS_ACCESS_KEY[$step_account]:-}" == "__current__" ]]; then
-            # Using whatever was already set (current env)
+            # Restore container credentials for current account
+            if [[ -n "${_ORIG_CONTAINER_CREDS:-}" ]]; then
+                export AWS_CONTAINER_CREDENTIALS_RELATIVE_URI="$_ORIG_CONTAINER_CREDS"
+            fi
             unset AWS_EC2_METADATA_DISABLED 2>/dev/null || true
             info "Using current credentials for $account_label"
         elif [[ -n "${CREDS_ACCESS_KEY[$step_account]:-}" ]]; then
@@ -476,6 +484,7 @@ for step_id in "${ALL_STEPS[@]}"; do
             export AWS_SECRET_ACCESS_KEY="${CREDS_SECRET_KEY[$step_account]}"
             export AWS_SESSION_TOKEN="${CREDS_SESSION_TOKEN[$step_account]}"
             export AWS_EC2_METADATA_DISABLED=true
+            unset AWS_CONTAINER_CREDENTIALS_RELATIVE_URI 2>/dev/null || true
             info "Switched to: $account_label"
         fi
 
