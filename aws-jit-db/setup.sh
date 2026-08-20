@@ -474,6 +474,10 @@ for step_id in "${ALL_STEPS[@]}"; do
         # Apply stored credentials for this account
         if [[ "${CREDS_ACCESS_KEY[$step_account]:-}" == "__current__" ]]; then
             # Restore container credentials for current account
+            # Must unset explicit creds so container/instance profile takes over
+            unset AWS_ACCESS_KEY_ID 2>/dev/null || true
+            unset AWS_SECRET_ACCESS_KEY 2>/dev/null || true
+            unset AWS_SESSION_TOKEN 2>/dev/null || true
             if [[ -n "${_ORIG_CONTAINER_CREDS:-}" ]]; then
                 export AWS_CONTAINER_CREDENTIALS_RELATIVE_URI="$_ORIG_CONTAINER_CREDS"
             fi
