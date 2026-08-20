@@ -64,12 +64,7 @@ else
         '.Statement += [{
             "Effect": "Allow",
             "Principal": {"AWS": $arn},
-            "Action": "sts:AssumeRole",
-            "Condition": {
-                "StringEquals": {
-                    "sts:ExternalId": "cloudanix-jit-db"
-                }
-            }
+            "Action": "sts:AssumeRole"
         }]')
 
     aws iam update-assume-role-policy --role-name "$ROLE_NAME" \

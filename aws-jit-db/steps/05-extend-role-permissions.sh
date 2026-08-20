@@ -3,14 +3,20 @@
 # Step: Extend Role Permissions (DB Account)
 # =============================================================================
 # Run in the DATABASE account. Creates or updates the cross-account IAM role
-# with RDS permissions so that the JIT ECS tasks can manage database access
-# (create/revoke temporary DB credentials).
+# with RDS permissions so that the JIT ECS tasks can manage database access.
+#
+# Creates two managed policies:
+#   - cdx-RDSConnectPolicy: rds-db:connect
+#   - cdx-RDSAuthTokenGenerationPolicy: rds:GetAuthenticationToken, Describe
+#
+# And creates the cross-account role that the JIT ECS task will assume.
 #
 # Required env vars:
 #   AWS_REGION
 #
 # Outputs:
 #   OUTPUT:ROLE_UPDATED=true
+#   OUTPUT:CROSS_ACCOUNT_ROLE_ARN
 # =============================================================================
 set -euo pipefail
 
@@ -24,7 +30,6 @@ require_env AWS_REGION
 # =============================================================================
 
 ROLE_NAME="cdx-jit-db-cross-account-role"
-POLICY_NAME="cdx-jit-db-rds-permissions"
 ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 
 info "Account: $ACCOUNT_ID | Region: $AWS_REGION"
@@ -38,7 +43,6 @@ step "Cross-Account Role"
 ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text 2>/dev/null) || ROLE_ARN=""
 
 if [[ -z "$ROLE_ARN" ]]; then
-    # Create the role with a placeholder trust policy (updated in step 06)
     aws iam create-role --role-name "$ROLE_NAME" \
         --assume-role-policy-document '{
             "Version":"2012-10-17",
@@ -48,7 +52,7 @@ if [[ -z "$ROLE_ARN" ]]; then
                 "Action":"sts:AssumeRole"
             }]
         }' \
-        --tags "Key=Purpose,Value=db-jit" "Key=created_by,Value=cloudanix" > /dev/null
+        --tags "Key=Purpose,Value=database-iam-jit" "Key=created_by,Value=cloudanix" > /dev/null
     ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text)
     ok "Role created: $ROLE_NAME ($ROLE_ARN)"
 else
@@ -56,59 +60,70 @@ else
 fi
 
 # =============================================================================
-# ATTACH RDS PERMISSIONS
+# RDS CONNECT POLICY
 # =============================================================================
 
-step "RDS Permissions Policy"
+step "RDS Connect Policy"
+RDS_CONNECT_POLICY_NAME="cdx-RDSConnectPolicy"
+RDS_CONNECT_POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${RDS_CONNECT_POLICY_NAME}"
 
-cat > /tmp/rds-policy.json << 'EOF'
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "RDSDescribe",
-            "Effect": "Allow",
-            "Action": [
-                "rds:DescribeDBInstances",
-                "rds:DescribeDBClusters",
-                "rds:ListTagsForResource"
-            ],
-            "Resource": "*"
-        },
-        {
-            "Sid": "RDSConnect",
-            "Effect": "Allow",
-            "Action": [
-                "rds-db:connect"
-            ],
-            "Resource": "*"
-        },
-        {
-            "Sid": "SecretsManagerDBCreds",
-            "Effect": "Allow",
-            "Action": [
-                "secretsmanager:GetSecretValue",
-                "secretsmanager:CreateSecret",
-                "secretsmanager:UpdateSecret",
-                "secretsmanager:DeleteSecret",
-                "secretsmanager:TagResource"
-            ],
-            "Resource": "*",
-            "Condition": {
-                "StringLike": {
-                    "secretsmanager:ResourceTag/created_by": "cloudanix"
-                }
-            }
-        }
-    ]
-}
-EOF
+if aws iam get-policy --policy-arn "$RDS_CONNECT_POLICY_ARN" > /dev/null 2>&1; then
+    ok "Policy exists: $RDS_CONNECT_POLICY_NAME"
+else
+    RDS_CONNECT_POLICY_ARN=$(aws iam create-policy \
+        --policy-name "$RDS_CONNECT_POLICY_NAME" \
+        --description "Policy for RDS IAM authentication connection" \
+        --policy-document '{
+            "Version":"2012-10-17",
+            "Statement":[{
+                "Effect":"Allow",
+                "Action":["rds-db:connect"],
+                "Resource":["arn:aws:rds-db:*:'$ACCOUNT_ID':*:*/*"]
+            }]
+        }' \
+        --query 'Policy.Arn' --output text)
+    ok "Policy created: $RDS_CONNECT_POLICY_NAME"
+fi
+aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$RDS_CONNECT_POLICY_ARN" 2>/dev/null || true
 
-# Check if policy already exists (idempotent put)
-aws iam put-role-policy --role-name "$ROLE_NAME" \
-    --policy-name "$POLICY_NAME" \
-    --policy-document file:///tmp/rds-policy.json
-ok "Policy attached: $POLICY_NAME"
+# =============================================================================
+# RDS AUTH TOKEN GENERATION POLICY
+# =============================================================================
+
+step "RDS Auth Token Policy"
+RDS_AUTH_POLICY_NAME="cdx-RDSAuthTokenGenerationPolicy"
+RDS_AUTH_POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${RDS_AUTH_POLICY_NAME}"
+
+if aws iam get-policy --policy-arn "$RDS_AUTH_POLICY_ARN" > /dev/null 2>&1; then
+    ok "Policy exists: $RDS_AUTH_POLICY_NAME"
+else
+    RDS_AUTH_POLICY_ARN=$(aws iam create-policy \
+        --policy-name "$RDS_AUTH_POLICY_NAME" \
+        --description "Policy for generating RDS auth tokens" \
+        --policy-document '{
+            "Version":"2012-10-17",
+            "Statement":[{
+                "Effect":"Allow",
+                "Action":[
+                    "rds:GetAuthenticationToken",
+                    "rds:DescribeDBClusters",
+                    "rds:DescribeDBInstances"
+                ],
+                "Resource":["arn:aws:rds-db:*:'$ACCOUNT_ID':*:*/*"]
+            }]
+        }' \
+        --query 'Policy.Arn' --output text)
+    ok "Policy created: $RDS_AUTH_POLICY_NAME"
+fi
+aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$RDS_AUTH_POLICY_ARN" 2>/dev/null || true
+
+# =============================================================================
+# VERIFY
+# =============================================================================
+
+info "Attached policies:"
+aws iam list-attached-role-policies --role-name "$ROLE_NAME" \
+    --query 'AttachedPolicies[*].PolicyName' --output text
 
 # =============================================================================
 # OUTPUT
@@ -116,3 +131,4 @@ ok "Policy attached: $POLICY_NAME"
 
 ok "Role permissions extended successfully"
 echo "OUTPUT:ROLE_UPDATED=true"
+echo "OUTPUT:CROSS_ACCOUNT_ROLE_ARN=${ROLE_ARN}"
