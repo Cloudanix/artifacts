@@ -35,7 +35,7 @@ source "$SCRIPT_DIR/../../lib/common.sh"
 
 require_env AWS_REGION PROJECT_NAME BUCKET_NAME SECRET_NAME \
     CDX_AUTH_TOKEN CDX_SIGNATURE_SECRET_KEY CDX_SENTRY_DSN CDX_DC CDX_API_BASE \
-    ECS_CLUSTER_NAME ENABLE_DAM VPC_ID PRIVATE_SUBNET_1_ID PRIVATE_SUBNET_2_ID
+    ECS_CLUSTER_NAME ENABLE_DAM ENCRYPTION_KEY VPC_ID PRIVATE_SUBNET_1_ID PRIVATE_SUBNET_2_ID
 
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 
@@ -165,7 +165,6 @@ if [[ -z "$SECRET_ARN" || "$SECRET_ARN" == "None" ]]; then
 
     if [[ "$ENABLE_DAM" == "true" ]]; then
         POSTGRES_PASSWORD=$(openssl rand -base64 32)
-        ENCRYPTION_KEY=$(openssl rand -hex 16)
         SECRET_JSON=$(echo "$SECRET_JSON" | jq \
             --arg pg_pass "$POSTGRES_PASSWORD" \
             --arg enc_key "$ENCRYPTION_KEY" \

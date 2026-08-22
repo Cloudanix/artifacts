@@ -112,6 +112,7 @@ CONFIG_FIELDS=(
     "CDX_SENTRY_DSN|nonempty|CDX_SENTRY_DSN|CDX Sentry DSN|*|false"
     "CDX_DC|nonempty|US|CDX Data Center (US/EU)|*|false"
     "CDX_API_BASE|nonempty|https://console.cloudanix.com|CDX API Base URL|*|false"
+    "ENCRYPTION_KEY|nonempty||Encryption Key|*|true"
     "DB_VPC_ID|nonempty||Database VPC ID|new-vpc|false"
     "DB_VPC_CIDR|cidr||Database VPC CIDR|new-vpc|false"
     "DB_SECURITY_GROUP_IDS|nonempty||RDS Security Group IDs (comma-separated)|new-vpc|false"
