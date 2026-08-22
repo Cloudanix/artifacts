@@ -224,11 +224,10 @@ fi
 
 # Attach managed policies
 aws iam attach-role-policy --role-name "$ROLE_NAME" \
-    --policy-arn "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy" 2>/dev/null || true
+    --policy-arn "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 aws iam attach-role-policy --role-name "$ROLE_NAME" \
-    --policy-arn "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore" 2>/dev/null || true
+    --policy-arn "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 
-# Secrets Manager policy
 # Secrets Manager policy
 SECRETS_POLICY_NAME="${PROJECT_NAME}-SecretsAccess"
 SECRETS_POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${SECRETS_POLICY_NAME}"
@@ -271,6 +270,19 @@ fi
 aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$LOGS_POLICY_ARN"
 
 ok "All IAM policies attached to $ROLE_NAME"
+
+# Wait for IAM policy propagation (AWS eventual consistency)
+info "Waiting for IAM policies to propagate..."
+sleep 10
+
+# Verify the critical policy is attached
+ATTACHED_COUNT=$(aws iam list-attached-role-policies --role-name "$ROLE_NAME" \
+    --query 'length(AttachedPolicies)' --output text)
+if [[ "$ATTACHED_COUNT" -lt 4 ]]; then
+    error "Expected at least 4 policies attached to $ROLE_NAME, found $ATTACHED_COUNT"
+    exit 1
+fi
+ok "Verified: $ATTACHED_COUNT policies attached"
 
 # =============================================================================
 # CLOUDWATCH LOG GROUPS
@@ -680,11 +692,14 @@ create_service() {
     fi
 }
 
-# ProxySQL service
+# ProxySQL service (must be running before proxyserver)
 create_service "proxysql" "proxysql" 1 \
     '{"enabled":true,"namespace":"proxysql-proxyserver","services":[{"portName":"proxysql-admin","discoveryName":"proxysql","clientAliases":[{"port":6032,"dnsName":"proxysql"}]}]}'
 
-# ProxyServer service (2 replicas)
+info "Waiting for ProxySQL to stabilize..."
+aws ecs wait services-stable --cluster "$ECS_CLUSTER_NAME" --services proxysql 2>/dev/null || true
+
+# ProxyServer service (2 replicas) — needs proxysql via Service Connect
 create_service "proxyserver" "proxyserver-task" 2 \
     '{"enabled":true,"namespace":"proxysql-proxyserver","services":[{"portName":"proxyserver-http","discoveryName":"proxyserver","clientAliases":[{"port":8079,"dnsName":"proxyserver"}]}]}'
 
@@ -706,11 +721,11 @@ if [[ "$ENABLE_DAM" == "true" ]]; then
         '{"enabled":true,"namespace":"proxysql-proxyserver","services":[{"portName":"dam-server-http","discoveryName":"dam-server","clientAliases":[{"port":8080,"dnsName":"dam-server"}]}]}'
 fi
 
-info "Waiting for core services to stabilize..."
-aws ecs wait services-stable --cluster "$ECS_CLUSTER_NAME" --services proxysql proxyserver query-logging 2>/dev/null || true
-
+info "Waiting for all services to stabilize..."
 if [[ "$ENABLE_DAM" == "true" ]]; then
-    aws ecs wait services-stable --cluster "$ECS_CLUSTER_NAME" --services dam-server postgresql 2>/dev/null || true
+    aws ecs wait services-stable --cluster "$ECS_CLUSTER_NAME" --services proxyserver query-logging dam-server 2>/dev/null || true
+else
+    aws ecs wait services-stable --cluster "$ECS_CLUSTER_NAME" --services proxyserver query-logging 2>/dev/null || true
 fi
 
 # =============================================================================
