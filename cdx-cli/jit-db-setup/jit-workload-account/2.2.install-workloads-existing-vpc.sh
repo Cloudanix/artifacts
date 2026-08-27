@@ -294,8 +294,37 @@ generate_efs_tags() {
     echo "$tags_json"
 }
 
+# Helper: create IAM policy only if it doesn't exist
+create_policy_if_not_exists() {
+    local policy_name=$1
+    local policy_document=$2
+    local existing_arn
+    existing_arn=$(aws iam list-policies --scope Local --query "Policies[?PolicyName=='$policy_name'].Arn" --output text 2>/dev/null)
+    if [ -n "$existing_arn" ] && [ "$existing_arn" != "None" ] && [ "$existing_arn" != "" ]; then
+        log "Policy $policy_name already exists — skipping"
+    else
+        log "Creating policy $policy_name..."
+        aws iam create-policy --policy-name "$policy_name" --policy-document "$policy_document"
+    fi
+}
+
+# Helper: create ECS service only if it doesn't exist
+create_service_if_not_exists() {
+    local service_name=$1
+    shift
+    local existing
+    existing=$(aws ecs describe-services --cluster $ECS_CLUSTER_NAME --services "$service_name" \
+        --query "services[?status=='ACTIVE'].serviceName | [0]" --output text 2>/dev/null) || existing=""
+    if [ -n "$existing" ] && [ "$existing" != "None" ]; then
+        log "ECS Service $service_name already exists — skipping"
+    else
+        log "Creating ECS Service $service_name..."
+        aws ecs create-service "$@"
+    fi
+}
+
 echo "=== JIT Account Infrastructure Setup (Idempotent) ==="
-echo "This script is safe to re-run. It will skip resources that already exist."
+echo "This script is safe to re-run. Existing resources will be skipped."
 echo ""
 echo "Please provide the following configuration details:"
 # AWS Configuration
@@ -373,22 +402,19 @@ else
 fi
 
 # ============================================================================
-# ECS SERVICE LINKED ROLE (idempotent — || true handles existing)
+# ECS SERVICE LINKED ROLE (idempotent — || true)
 # ============================================================================
-
-log "Creating ECS Service Linked Role..."
+log "Ensuring ECS Service Linked Role exists..."
 aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com 2>/dev/null || true
 
 # ============================================================================
-# IAM ROLE (idempotent)
+# IAM ROLE (idempotent — check before create)
 # ============================================================================
-
 log "Setting up ECS Task Role and policies..."
-
 ECS_TASK_ROLE_NAME="cdx-ECSTaskRole"
 
 if aws iam get-role --role-name $ECS_TASK_ROLE_NAME >/dev/null 2>&1; then
-    log "IAM Role $ECS_TASK_ROLE_NAME already exists — skipping creation"
+    log "IAM Role $ECS_TASK_ROLE_NAME already exists — skipping"
 else
     log "Creating IAM Role $ECS_TASK_ROLE_NAME..."
     aws iam create-role \
@@ -410,22 +436,6 @@ fi
 # ============================================================================
 # IAM POLICIES (idempotent — check before create)
 # ============================================================================
-
-create_policy_if_not_exists() {
-    local policy_name=$1
-    local policy_document=$2
-    
-    local existing_arn=$(aws iam list-policies --scope Local --query "Policies[?PolicyName=='$policy_name'].Arn" --output text)
-    if [ -n "$existing_arn" ] && [ "$existing_arn" != "None" ] && [ "$existing_arn" != "" ]; then
-        log "Policy $policy_name already exists — skipping"
-    else
-        log "Creating policy $policy_name..."
-        aws iam create-policy \
-            --policy-name "$policy_name" \
-            --policy-document "$policy_document"
-    fi
-}
-
 create_policy_if_not_exists "cdx-ECSSecretsAccessPolicy" '{
     "Version": "2012-10-17",
     "Statement": [
@@ -485,21 +495,17 @@ create_policy_if_not_exists "$S3_POLICY_NAME" '{
 }'
 
 LOGS_POLICY_NAME="cdx-CloudWatchLogsPolicy"
-
-# Build array of ARNs
 LOG_GROUP_ARNS=(
     "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_1:*"
     "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_2:*"
     "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_3:*"
 )
-
 if [ "$ENABLE_DAM" = true ]; then
     LOG_GROUP_ARNS+=(
         "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_4:*"
         "arn:aws:logs:$AWS_REGION:$ACCOUNT_ID:log-group:$LOG_GROUP_NAME_5:*"
     )
 fi
-
 LOG_GROUP_ARNS_JSON=$(printf '"%s",' "${LOG_GROUP_ARNS[@]}")
 LOG_GROUP_ARNS_JSON="[${LOG_GROUP_ARNS_JSON%,}]"
 
@@ -518,51 +524,28 @@ create_policy_if_not_exists "$LOGS_POLICY_NAME" "{
 }"
 
 # ============================================================================
-# ATTACH POLICIES TO ROLE (idempotent — attach-role-policy is naturally idempotent)
+# ATTACH POLICIES (idempotent — attach-role-policy is naturally idempotent)
 # ============================================================================
-
 SECRETS_POLICY_ARN=$(aws iam list-policies --query 'Policies[?PolicyName==`cdx-ECSSecretsAccessPolicy`].Arn' --output text)
 RDS_ASSUME_POLICY_ARN=$(aws iam list-policies --query 'Policies[?PolicyName==`cdx-ECSRDSAssumeRolePolicy`].Arn' --output text)
 EFS_POLICY_ARN=$(aws iam list-policies --query 'Policies[?PolicyName==`cdx-EFSAccessPolicy`].Arn' --output text)
 S3_POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='$S3_POLICY_NAME'].Arn" --output text)
 LOGS_POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='$LOGS_POLICY_NAME'].Arn" --output text)
 
-# attach-role-policy is idempotent (no error if already attached)
-aws iam attach-role-policy \
-    --role-name $ECS_TASK_ROLE_NAME \
-    --policy-arn "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+aws iam attach-role-policy --role-name $ECS_TASK_ROLE_NAME --policy-arn "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+aws iam attach-role-policy --role-name $ECS_TASK_ROLE_NAME --policy-arn "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+aws iam attach-role-policy --role-name $ECS_TASK_ROLE_NAME --policy-arn $SECRETS_POLICY_ARN
+aws iam attach-role-policy --role-name $ECS_TASK_ROLE_NAME --policy-arn $RDS_ASSUME_POLICY_ARN
+aws iam attach-role-policy --role-name $ECS_TASK_ROLE_NAME --policy-arn $EFS_POLICY_ARN
+aws iam attach-role-policy --role-name $ECS_TASK_ROLE_NAME --policy-arn $S3_POLICY_ARN
+aws iam attach-role-policy --role-name $ECS_TASK_ROLE_NAME --policy-arn $LOGS_POLICY_ARN
 
-aws iam attach-role-policy \
-    --role-name $ECS_TASK_ROLE_NAME \
-    --policy-arn "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-
-aws iam attach-role-policy \
-    --role-name $ECS_TASK_ROLE_NAME \
-    --policy-arn $SECRETS_POLICY_ARN
-
-aws iam attach-role-policy \
-    --role-name $ECS_TASK_ROLE_NAME \
-    --policy-arn $RDS_ASSUME_POLICY_ARN
-
-aws iam attach-role-policy \
-    --role-name $ECS_TASK_ROLE_NAME \
-    --policy-arn $EFS_POLICY_ARN
-
-aws iam attach-role-policy \
-    --role-name $ECS_TASK_ROLE_NAME \
-    --policy-arn $S3_POLICY_ARN
-
-aws iam attach-role-policy \
-    --role-name $ECS_TASK_ROLE_NAME \
-    --policy-arn $LOGS_POLICY_ARN
-    
 log "ECS Task Role and policies ready"
 
 # ============================================================================
-# CLOUDWATCH LOG GROUPS (idempotent)
+# CLOUDWATCH LOG GROUPS (idempotent — || true on create)
 # ============================================================================
-
-log "Creating CloudWatch Log Groups..."
+log "Setting up CloudWatch Log Groups..."
 aws logs create-log-group --log-group-name $LOG_GROUP_NAME_1 2>/dev/null || log "Log group $LOG_GROUP_NAME_1 already exists"
 aws logs create-log-group --log-group-name $LOG_GROUP_NAME_2 2>/dev/null || log "Log group $LOG_GROUP_NAME_2 already exists"
 aws logs create-log-group --log-group-name $LOG_GROUP_NAME_3 2>/dev/null || log "Log group $LOG_GROUP_NAME_3 already exists"
@@ -580,10 +563,9 @@ if [ "$ENABLE_DAM" = true ]; then
 fi
 
 # ============================================================================
-# SECRETS MANAGER (idempotent)
+# SECRETS MANAGER (idempotent — check before create)
 # ============================================================================
-
-log "Setting up Secrets in Secrets Manager..."
+log "Setting up Secrets Manager..."
 
 if [ "$ENABLE_DAM" = true ]; then
     SECRET_STRING="{\"CDX_AUTH_TOKEN\": \"$CDX_AUTH_TOKEN\", \"CDX_SIGNATURE_SECRET_KEY\": \"$CDX_SIGNATURE_SECRET_KEY\", \"CDX_SENTRY_DSN\": \"$CDX_SENTRY_DSN\", \"CDX_DC\": \"$CDX_DC\", \"CDX_API_BASE\": \"$CDX_API_BASE\", \"CDX_LOGGING_S3_BUCKET\": \"$BUCKET_NAME\", \"POSTGRES_PASSWORD\": \"$POSTGRES_PASSWORD\", \"ENCRYPTION_KEY\": \"$ENCRYPTION_KEY\" }"
@@ -594,7 +576,7 @@ fi
 SECRET_ARN=$(aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --query 'ARN' --output text 2>/dev/null) || SECRET_ARN=""
 
 if [ -n "$SECRET_ARN" ] && [ "$SECRET_ARN" != "None" ]; then
-    log "Secret $SECRET_NAME already exists (ARN: $SECRET_ARN) — skipping creation"
+    log "Secret $SECRET_NAME already exists ($SECRET_ARN) — skipping creation"
 else
     log "Creating secret $SECRET_NAME..."
     SECRET_ARN=$(aws secretsmanager create-secret \
@@ -609,9 +591,8 @@ fi
 apply_secret_tags "$SECRET_ARN" "$TAGS_FILE"
 
 # ============================================================================
-# S3 BUCKET (idempotent)
+# S3 BUCKET (idempotent — check before create)
 # ============================================================================
-
 log "Setting up S3 Bucket..."
 
 if aws s3api head-bucket --bucket "$BUCKET_NAME" 2>/dev/null; then
@@ -619,13 +600,9 @@ if aws s3api head-bucket --bucket "$BUCKET_NAME" 2>/dev/null; then
 else
     log "Creating S3 bucket $BUCKET_NAME..."
     if [ "$AWS_REGION" == "us-east-1" ]; then
-        aws s3api create-bucket \
-            --bucket "$BUCKET_NAME" \
-            --region "$AWS_REGION"
+        aws s3api create-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION"
     else
-        aws s3api create-bucket \
-            --bucket "$BUCKET_NAME" \
-            --region "$AWS_REGION" \
+        aws s3api create-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION" \
             --create-bucket-configuration LocationConstraint="$AWS_REGION"
     fi
 fi
@@ -633,14 +610,15 @@ fi
 apply_tags_alt "$BUCKET_NAME" "$TAGS_FILE" "s3api"
 
 # ============================================================================
-# ECS CLUSTER (idempotent — create-cluster returns existing if it exists)
+# ECS CLUSTER (idempotent — check before create)
 # ============================================================================
-
 log "Setting up ECS Cluster..."
-ECS_CLUSTER_ARN=$(aws ecs describe-clusters --clusters $ECS_CLUSTER_NAME --query "clusters[?status=='ACTIVE'].clusterArn" --output text 2>/dev/null)
+
+ECS_CLUSTER_ARN=$(aws ecs describe-clusters --clusters $ECS_CLUSTER_NAME \
+    --query "clusters[?status=='ACTIVE'].clusterArn | [0]" --output text 2>/dev/null) || ECS_CLUSTER_ARN=""
 
 if [ -n "$ECS_CLUSTER_ARN" ] && [ "$ECS_CLUSTER_ARN" != "None" ] && [ "$ECS_CLUSTER_ARN" != "" ]; then
-    log "ECS Cluster $ECS_CLUSTER_NAME already exists — skipping creation"
+    log "ECS Cluster $ECS_CLUSTER_NAME already exists — skipping"
 else
     log "Creating ECS Cluster $ECS_CLUSTER_NAME..."
     ECS_CLUSTER_ARN=$(aws ecs create-cluster \
@@ -654,20 +632,19 @@ fi
 apply_ecs_tags "$ECS_CLUSTER_ARN" "$ECS_CLUSTER_NAME" "$TAGS_FILE"
 
 # ============================================================================
-# SECURITY GROUP (idempotent)
+# SECURITY GROUP (idempotent — check before create)
 # ============================================================================
-
 log "Setting up Security Group..."
 
 ECS_SG_ID=$(aws ec2 describe-security-groups \
     --filters "Name=group-name,Values=${PROJECT_NAME}-ecs-sg" "Name=vpc-id,Values=$VPC_ID" \
-    --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
+    --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null) || ECS_SG_ID=""
 
 if [ -n "$ECS_SG_ID" ] && [ "$ECS_SG_ID" != "None" ]; then
-    log "Security group ${PROJECT_NAME}-ecs-sg already exists ($ECS_SG_ID) — skipping creation"
+    log "Security group ${PROJECT_NAME}-ecs-sg already exists ($ECS_SG_ID) — skipping"
 else
     SG_TAG_SPEC=$(generate_tag_specs "security-group" "$TAGS_FILE")
-    log "Creating Security Group ${PROJECT_NAME}-ecs-sg..."
+    log "Creating Security Group..."
     ECS_SG_ID=$(aws ec2 create-security-group \
         --group-name "${PROJECT_NAME}-ecs-sg" \
         --description "Security group for ECS cluster" \
@@ -676,75 +653,35 @@ else
         --query 'GroupId' \
         --output text)
 
-    # Add internal communication rules for ECS tasks
-    aws ec2 authorize-security-group-ingress \
-        --group-id $ECS_SG_ID \
-        --protocol tcp \
-        --port 6032 \
-        --source-group $ECS_SG_ID
+    # Add internal communication rules
+    aws ec2 authorize-security-group-ingress --group-id $ECS_SG_ID --protocol tcp --port 6032 --source-group $ECS_SG_ID
+    aws ec2 authorize-security-group-ingress --group-id $ECS_SG_ID --protocol tcp --port 6033 --source-group $ECS_SG_ID
+    aws ec2 authorize-security-group-ingress --group-id $ECS_SG_ID --protocol tcp --port 8079 --source-group $ECS_SG_ID
+    aws ec2 authorize-security-group-ingress --group-id $ECS_SG_ID --protocol tcp --port 2049 --source-group $ECS_SG_ID
+    aws ec2 authorize-security-group-egress --group-id $ECS_SG_ID --protocol tcp --port 2049 --source-group $ECS_SG_ID
 
-    aws ec2 authorize-security-group-ingress \
-        --group-id $ECS_SG_ID \
-        --protocol tcp \
-        --port 6033 \
-        --source-group $ECS_SG_ID
-
-    aws ec2 authorize-security-group-ingress \
-        --group-id $ECS_SG_ID \
-        --protocol tcp \
-        --port 8079 \
-        --source-group $ECS_SG_ID
-
-    aws ec2 authorize-security-group-ingress \
-        --group-id $ECS_SG_ID \
-        --protocol tcp \
-        --port 2049 \
-        --source-group $ECS_SG_ID
-
-    aws ec2 authorize-security-group-egress \
-        --group-id $ECS_SG_ID \
-        --protocol tcp \
-        --port 2049 \
-        --source-group $ECS_SG_ID
-
-    # Add DAM-specific security group rules
     if [ "$ENABLE_DAM" = true ]; then
         log "Adding DAM security group rules..."
-        
-        aws ec2 authorize-security-group-ingress \
-            --group-id $ECS_SG_ID \
-            --protocol tcp \
-            --port 5432 \
-            --source-group $ECS_SG_ID
-        
-        aws ec2 authorize-security-group-ingress \
-            --group-id $ECS_SG_ID \
-            --protocol tcp \
-            --port 8080 \
-            --source-group $ECS_SG_ID
-        
-        aws ec2 authorize-security-group-egress \
-            --group-id $ECS_SG_ID \
-            --protocol tcp \
-            --port 5432 \
-            --source-group $ECS_SG_ID
+        aws ec2 authorize-security-group-ingress --group-id $ECS_SG_ID --protocol tcp --port 5432 --source-group $ECS_SG_ID
+        aws ec2 authorize-security-group-ingress --group-id $ECS_SG_ID --protocol tcp --port 8080 --source-group $ECS_SG_ID
+        aws ec2 authorize-security-group-egress --group-id $ECS_SG_ID --protocol tcp --port 5432 --source-group $ECS_SG_ID
     fi
 fi
 
 # ============================================================================
-# EFS FILE SYSTEM (idempotent)
+# EFS FILE SYSTEM (idempotent — check before create)
 # ============================================================================
-
 log "Setting up EFS file system..."
 
-EFS_ID=$(aws efs describe-file-systems --query "FileSystems[?Tags[?Key=='Name' && Value=='${PROJECT_NAME}-efs']].FileSystemId | [0]" --output text 2>/dev/null)
+EFS_ID=$(aws efs describe-file-systems \
+    --query "FileSystems[?Tags[?Key=='Name' && Value=='${PROJECT_NAME}-efs']].FileSystemId | [0]" \
+    --output text 2>/dev/null) || EFS_ID=""
 
 if [ -n "$EFS_ID" ] && [ "$EFS_ID" != "None" ]; then
     log "EFS ${PROJECT_NAME}-efs already exists ($EFS_ID) — skipping creation"
 else
     log "Creating EFS file system..."
     EFS_TAGS=$(generate_efs_tags "efs" "$TAGS_FILE")
-
     EFS_ID=$(aws efs create-file-system \
         --performance-mode generalPurpose \
         --throughput-mode bursting \
@@ -753,55 +690,41 @@ else
         --query 'FileSystemId' \
         --output text)
 
-    # Wait for EFS to be available
     log "Waiting for EFS to be available..."
     while true; do
-        STATUS=$(aws efs describe-file-systems \
-            --file-system-id $EFS_ID \
-            --query 'FileSystems[0].LifeCycleState' \
-            --output text)
-        
+        STATUS=$(aws efs describe-file-systems --file-system-id $EFS_ID \
+            --query 'FileSystems[0].LifeCycleState' --output text)
         if [ "$STATUS" = "available" ]; then
             log "EFS is now available"
             break
         fi
-        
-        log "Waiting for EFS to become available... Current status: $STATUS"
+        log "Waiting for EFS... Current status: $STATUS"
         sleep 10
     done
 fi
 
-# Mount targets (idempotent — check before creating)
+# EFS Mount Targets (idempotent — check subnet before create)
 log "Setting up EFS mount targets..."
-
 EXISTING_MT_SUBNETS=$(aws efs describe-mount-targets --file-system-id $EFS_ID \
-    --query 'MountTargets[*].SubnetId' --output text 2>/dev/null)
+    --query 'MountTargets[*].SubnetId' --output text 2>/dev/null) || EXISTING_MT_SUBNETS=""
 
 if echo "$EXISTING_MT_SUBNETS" | grep -q "$PRIVATE_SUBNET_1_ID"; then
     log "Mount target in $PRIVATE_SUBNET_1_ID already exists — skipping"
 else
-    log "Creating mount target in $PRIVATE_SUBNET_1_ID..."
-    aws efs create-mount-target \
-        --file-system-id $EFS_ID \
-        --subnet-id $PRIVATE_SUBNET_1_ID \
-        --security-groups $ECS_SG_ID
+    aws efs create-mount-target --file-system-id $EFS_ID --subnet-id $PRIVATE_SUBNET_1_ID --security-groups $ECS_SG_ID
 fi
 
 if echo "$EXISTING_MT_SUBNETS" | grep -q "$PRIVATE_SUBNET_2_ID"; then
     log "Mount target in $PRIVATE_SUBNET_2_ID already exists — skipping"
 else
-    log "Creating mount target in $PRIVATE_SUBNET_2_ID..."
-    aws efs create-mount-target \
-        --file-system-id $EFS_ID \
-        --subnet-id $PRIVATE_SUBNET_2_ID \
-        --security-groups $ECS_SG_ID
+    aws efs create-mount-target --file-system-id $EFS_ID --subnet-id $PRIVATE_SUBNET_2_ID --security-groups $ECS_SG_ID
 fi
 
-# EFS Access Point (idempotent)
+# EFS Access Point (idempotent — check before create)
 log "Setting up EFS access point..."
-
 ACCESS_POINT_ID=$(aws efs describe-access-points --file-system-id $EFS_ID \
-    --query "AccessPoints[?RootDirectory.Path=='/proxysql-data'].AccessPointId | [0]" --output text 2>/dev/null)
+    --query "AccessPoints[?RootDirectory.Path=='/proxysql-data'].AccessPointId | [0]" \
+    --output text 2>/dev/null) || ACCESS_POINT_ID=""
 
 if [ -n "$ACCESS_POINT_ID" ] && [ "$ACCESS_POINT_ID" != "None" ]; then
     log "EFS access point already exists ($ACCESS_POINT_ID) — skipping"
@@ -818,14 +741,13 @@ fi
 # ============================================================================
 # ECR TAGGING (idempotent — tagging is always safe to re-apply)
 # ============================================================================
-
 REPOSITORIES=("cloudanix/ecr-aws-jit-proxy-sql" "cloudanix/ecr-aws-jit-proxy-server" "cloudanix/ecr-aws-jit-query-logging")
 
 if [ "$ENABLE_DAM" = true ]; then
     REPOSITORIES+=("cloudanix/ecr-aws-jit-dam-server" "cloudanix/ecr-aws-jit-postgresql")
 fi
 
-log "Tagging specified ECR repositories..."
+log "Tagging ECR repositories..."
 for repo in "${REPOSITORIES[@]}"; do
     REPO_ARN=$(aws ecr describe-repositories --repository-names "$repo" \
         --query 'repositories[0].repositoryArn' --output text 2>/dev/null) || REPO_ARN=""
@@ -835,22 +757,20 @@ for repo in "${REPOSITORIES[@]}"; do
             log "Warning: Failed to tag ECR repository $repo"
         log "Tagged ECR repository: $repo"
     else
-        log "Warning: Repository $repo not found! Skipping tag."
+        log "Warning: Repository $repo not found! Skipping."
     fi
 done
 
 # ============================================================================
-# TASK DEFINITIONS (idempotent — register-task-definition creates new revision)
+# TASK DEFINITIONS (idempotent — register creates new revision, harmless)
 # ============================================================================
-
-# Get task tags
 if [ -n "$TAGS_FILE" ]; then
     TASK_TAGS=$(generate_task_tags "$TAGS_FILE")
 else
     TASK_TAGS='[{"key":"Purpose","value":"database-iam-jit"},{"key":"created_by","value":"cloudanix"}]'
 fi
 
-# Create ProxyServer task definition
+# ProxyServer task definition
 cat <<EOF > "proxyserver-task-definition.json"
 {
     "family": "proxyserver-task",
@@ -905,7 +825,6 @@ cat <<EOF > "proxyserver-task-definition.json"
                 }
 EOF
 
-# Add POSTGRES_PASSWORD if DAM is enabled
 if [ "$ENABLE_DAM" = true ]; then
     cat <<EOF >> "proxyserver-task-definition.json"
                 ,
@@ -970,7 +889,7 @@ cat <<EOF >> "proxyserver-task-definition.json"
 }
 EOF
 
-# Create ProxySQL task definition
+# ProxySQL task definition
 cat <<EOF > "proxysql-task-definition.json"
 {
     "family": "proxysql",
@@ -1042,7 +961,7 @@ cat <<EOF > "proxysql-task-definition.json"
 }
 EOF
 
-# Create Query Logging task definition
+# Query Logging task definition
 cat <<EOF > "query-logging-task-definition.json"
 {
     "family": "query-logging-task",
@@ -1118,7 +1037,6 @@ cat <<EOF > "query-logging-task-definition.json"
                 }
 EOF
 
-# Add POSTGRES_PASSWORD and ENCRYPTION_KEY if DAM is enabled
 if [ "$ENABLE_DAM" = true ]; then
     cat <<EOF >> "query-logging-task-definition.json"
                 ,
@@ -1174,11 +1092,10 @@ cat <<EOF >> "query-logging-task-definition.json"
 }
 EOF
 
-# Create DAM-specific task definitions
+# DAM task definitions
 if [ "$ENABLE_DAM" = true ]; then
     log "Creating DAM task definitions..."
-    
-    # DAM Server task definition
+
     cat <<EOF > "dam-server-task-definition.json"
 {
     "family": "dam-server-task",
@@ -1197,63 +1114,23 @@ if [ "$ENABLE_DAM" = true ]; then
             ],
             "essential": true,
             "environment": [
-                {
-                    "name": "AWS_DEFAULT_REGION",
-                    "value": "$AWS_REGION"
-                },
-                {
-                    "name": "NODE_ENV",
-                    "value": "production"
-                },
-                {
-                    "name": "PROXYSERVER_HOST",
-                    "value": "proxyserver"
-                },
-                {
-                    "name": "PROXYSERVER_PORT",
-                    "value": "8079"
-                },
-                {
-                    "name": "DAM_LOG_LEVEL",
-                    "value": "INFO"
-                },
-                {
-                    "name": "DAM_APP_ENV",
-                    "value": "production"
-                }
+                { "name": "AWS_DEFAULT_REGION", "value": "$AWS_REGION" },
+                { "name": "NODE_ENV", "value": "production" },
+                { "name": "PROXYSERVER_HOST", "value": "proxyserver" },
+                { "name": "PROXYSERVER_PORT", "value": "8079" },
+                { "name": "DAM_LOG_LEVEL", "value": "INFO" },
+                { "name": "DAM_APP_ENV", "value": "production" }
             ],
             "secrets": [
-                {
-                    "name": "CDX_AUTH_TOKEN",
-                    "valueFrom": "$SECRET_ARN:CDX_AUTH_TOKEN::"
-                },
-                {
-                    "name": "CDX_SIGNATURE_SECRET_KEY",
-                    "valueFrom": "$SECRET_ARN:CDX_SIGNATURE_SECRET_KEY::"
-                },
-                {
-                    "name": "CDX_SENTRY_DSN",
-                    "valueFrom": "$SECRET_ARN:CDX_SENTRY_DSN::"
-                },
-                {
-                    "name": "CDX_DC",
-                    "valueFrom": "$SECRET_ARN:CDX_DC::"
-                },
-                {
-                    "name": "CDX_API_BASE",
-                    "valueFrom": "$SECRET_ARN:CDX_API_BASE::"
-                },
-                {
-                    "name": "POSTGRES_PASSWORD",
-                    "valueFrom": "$SECRET_ARN:POSTGRES_PASSWORD::"
-                }
+                { "name": "CDX_AUTH_TOKEN", "valueFrom": "$SECRET_ARN:CDX_AUTH_TOKEN::" },
+                { "name": "CDX_SIGNATURE_SECRET_KEY", "valueFrom": "$SECRET_ARN:CDX_SIGNATURE_SECRET_KEY::" },
+                { "name": "CDX_SENTRY_DSN", "valueFrom": "$SECRET_ARN:CDX_SENTRY_DSN::" },
+                { "name": "CDX_DC", "valueFrom": "$SECRET_ARN:CDX_DC::" },
+                { "name": "CDX_API_BASE", "valueFrom": "$SECRET_ARN:CDX_API_BASE::" },
+                { "name": "POSTGRES_PASSWORD", "valueFrom": "$SECRET_ARN:POSTGRES_PASSWORD::" }
             ],
             "mountPoints": [
-                {
-                    "sourceVolume": "proxysql-data",
-                    "containerPath": "/var/lib/proxysql",
-                    "readOnly": false
-                }
+                { "sourceVolume": "proxysql-data", "containerPath": "/var/lib/proxysql", "readOnly": false }
             ],
             "volumesFrom": [],
             "logConfiguration": {
@@ -1278,24 +1155,18 @@ if [ "$ENABLE_DAM" = true ]; then
                 "rootDirectory": "/",
                 "transitEncryption": "ENABLED",
                 "transitEncryptionPort": 2049,
-                "authorizationConfig": {
-                    "accessPointId": "$ACCESS_POINT_ID",
-                    "iam": "ENABLED"
-                }
+                "authorizationConfig": { "accessPointId": "$ACCESS_POINT_ID", "iam": "ENABLED" }
             }
         }
     ],
     "placementConstraints": [],
-    "requiresCompatibilities": [
-        "FARGATE"
-    ],
+    "requiresCompatibilities": ["FARGATE"],
     "cpu": "256",
     "memory": "1024",
     "tags": $TASK_TAGS
 }
 EOF
 
-    # PostgreSQL task definition
     cat <<EOF > "postgresql-task-definition.json"
 {
     "family": "postgresql-task",
@@ -1305,44 +1176,20 @@ EOF
             "image": "$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/cloudanix/ecr-aws-jit-postgresql:latest",
             "cpu": 0,
             "portMappings": [
-                {
-                    "name": "postgresql-db",
-                    "containerPort": 5432,
-                    "hostPort": 5432,
-                    "protocol": "tcp"
-                }
+                { "name": "postgresql-db", "containerPort": 5432, "hostPort": 5432, "protocol": "tcp" }
             ],
             "essential": true,
             "environment": [
-                {
-                    "name": "POSTGRES_USER",
-                    "value": "pgjitdbuser"
-                },
-                {
-                    "name": "POSTGRES_DB",
-                    "value": "jitdb"
-                },
-                {
-                    "name": "PGDATA",
-                    "value": "/var/lib/proxysql/postgresql/data/pgdata"
-                },
-                {
-                    "name": "POSTGRES_INITDB_ARGS",
-                    "value": "-E UTF8 --locale=en_US.utf8"
-                }
+                { "name": "POSTGRES_USER", "value": "pgjitdbuser" },
+                { "name": "POSTGRES_DB", "value": "jitdb" },
+                { "name": "PGDATA", "value": "/var/lib/proxysql/postgresql/data/pgdata" },
+                { "name": "POSTGRES_INITDB_ARGS", "value": "-E UTF8 --locale=en_US.utf8" }
             ],
             "secrets": [
-                {
-                    "name": "POSTGRES_PASSWORD",
-                    "valueFrom": "$SECRET_ARN:POSTGRES_PASSWORD::"
-                }
+                { "name": "POSTGRES_PASSWORD", "valueFrom": "$SECRET_ARN:POSTGRES_PASSWORD::" }
             ],
             "mountPoints": [
-                {
-                    "sourceVolume": "proxysql-data",
-                    "containerPath": "/var/lib/proxysql",
-                    "readOnly": false
-                }
+                { "sourceVolume": "proxysql-data", "containerPath": "/var/lib/proxysql", "readOnly": false }
             ],
             "volumesFrom": [],
             "logConfiguration": {
@@ -1354,10 +1201,7 @@ EOF
                 }
             },
             "healthCheck": {
-                "command": [
-                    "CMD-SHELL",
-                    "pg_isready -U pgjitdbuser -d jitdb || exit 1"
-                ],
+                "command": ["CMD-SHELL", "pg_isready -U pgjitdbuser -d jitdb || exit 1"],
                 "interval": 30,
                 "timeout": 5,
                 "retries": 3,
@@ -1377,17 +1221,12 @@ EOF
                 "rootDirectory": "/",
                 "transitEncryption": "ENABLED",
                 "transitEncryptionPort": 2049,
-                "authorizationConfig": {
-                    "accessPointId": "$ACCESS_POINT_ID",
-                    "iam": "ENABLED"
-                }
+                "authorizationConfig": { "accessPointId": "$ACCESS_POINT_ID", "iam": "ENABLED" }
             }
         }
     ],
     "placementConstraints": [],
-    "requiresCompatibilities": [
-        "FARGATE"
-    ],
+    "requiresCompatibilities": ["FARGATE"],
     "cpu": "256",
     "memory": "1024",
     "tags": $TASK_TAGS
@@ -1407,12 +1246,10 @@ if [ "$ENABLE_DAM" = true ]; then
 fi
 
 # ============================================================================
-# SERVICE CONNECT NAMESPACE (idempotent — already had a check)
+# SERVICE CONNECT NAMESPACE (idempotent — already had check)
 # ============================================================================
-
 log "Setting up Service Connect namespace..."
 if ! aws servicediscovery list-namespaces --query "Namespaces[?Name=='proxysql-proxyserver']" --output text | grep -q 'ns-'; then
-    log "Creating namespace proxysql-proxyserver..."
     aws servicediscovery create-private-dns-namespace \
         --name proxysql-proxyserver \
         --vpc $VPC_ID \
@@ -1427,8 +1264,6 @@ NAMESPACE_ID=$(aws servicediscovery list-namespaces \
 # ============================================================================
 # ECS SERVICES (idempotent — check before create)
 # ============================================================================
-
-# Get service tags
 if [ -n "$TAGS_FILE" ]; then
     SERVICE_TAGS=$(generate_ecs_service_tags "$TAGS_FILE")
 else
@@ -1437,23 +1272,6 @@ fi
 
 log "Setting up ECS Services..."
 
-# Helper function: create service only if it doesn't already exist
-create_service_if_not_exists() {
-    local service_name=$1
-    shift
-    
-    local existing=$(aws ecs describe-services --cluster $ECS_CLUSTER_NAME --services "$service_name" \
-        --query "services[?status=='ACTIVE'].serviceName | [0]" --output text 2>/dev/null)
-    
-    if [ -n "$existing" ] && [ "$existing" != "None" ]; then
-        log "ECS Service $service_name already exists — skipping creation"
-    else
-        log "Creating ECS Service $service_name..."
-        aws ecs create-service "$@"
-    fi
-}
-
-# Create ProxySQL service
 create_service_if_not_exists "proxysql" \
     --cluster $ECS_CLUSTER_NAME \
     --service-name proxysql \
@@ -1477,7 +1295,6 @@ create_service_if_not_exists "proxysql" \
         }]
     }'
 
-# Create ProxyServer service
 create_service_if_not_exists "proxyserver" \
     --cluster $ECS_CLUSTER_NAME \
     --service-name proxyserver \
@@ -1501,7 +1318,6 @@ create_service_if_not_exists "proxyserver" \
         }]
     }'
 
-# Create Query Logging service
 create_service_if_not_exists "query-logging" \
     --cluster $ECS_CLUSTER_NAME \
     --service-name query-logging \
@@ -1518,11 +1334,9 @@ create_service_if_not_exists "query-logging" \
         "services": []
     }'
 
-# Create DAM services if enabled
 if [ "$ENABLE_DAM" = true ]; then
     log "Setting up DAM services..."
-    
-    # Create PostgreSQL service first
+
     create_service_if_not_exists "postgresql" \
         --cluster $ECS_CLUSTER_NAME \
         --service-name postgresql \
@@ -1545,14 +1359,10 @@ if [ "$ENABLE_DAM" = true ]; then
                 }]
             }]
         }'
-    
-    # Wait for PostgreSQL to be stable before creating DAM server
-    log "Waiting for PostgreSQL service to be stable..."
-    aws ecs wait services-stable \
-        --cluster $ECS_CLUSTER_NAME \
-        --services postgresql || log "Warning: PostgreSQL service not yet stable"
-    
-    # Create DAM Server service
+
+    log "Waiting for PostgreSQL service to stabilize..."
+    aws ecs wait services-stable --cluster $ECS_CLUSTER_NAME --services postgresql || log "Warning: PostgreSQL not yet stable"
+
     create_service_if_not_exists "dam-server" \
         --cluster $ECS_CLUSTER_NAME \
         --service-name dam-server \
@@ -1579,15 +1389,11 @@ fi
 
 # Wait for services to be stable
 log "Waiting for core services to be stable..."
-aws ecs wait services-stable \
-    --cluster $ECS_CLUSTER_NAME \
-    --services proxysql proxyserver query-logging || log "Warning: Some services not yet stable"
+aws ecs wait services-stable --cluster $ECS_CLUSTER_NAME --services proxysql proxyserver query-logging || log "Warning: Some services not yet stable"
 
 if [ "$ENABLE_DAM" = true ]; then
     log "Waiting for DAM services to be stable..."
-    aws ecs wait services-stable \
-        --cluster $ECS_CLUSTER_NAME \
-        --services dam-server || log "Warning: DAM service not yet stable"
+    aws ecs wait services-stable --cluster $ECS_CLUSTER_NAME --services dam-server || log "Warning: DAM service not yet stable"
 fi
 
 echo "ECS services setup complete!"
@@ -1652,10 +1458,8 @@ if [ "$ENABLE_UPDATE_SERVICES" = true ]; then
 
     for ECS_SERVICE in "${ECS_SERVICES[@]}"; do
         echo "Updating ecs service: $ECS_SERVICE"
-        
         aws ecs update-service --cluster "$ECS_CLUSTER_NAME" --service "$ECS_SERVICE" \
             --force-new-deployment --region "$AWS_REGION" --output text > /dev/null
-        
         sleep 10
     done
 
