@@ -1,163 +1,254 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Step: Setup Bastion in Existing VPC
+# Step: Setup Bastion (Existing VPC) — ECS Fargate
 # =============================================================================
-# Deploys a bastion EC2 instance into an existing VPC with SSM access.
-# Creates security group, IAM role, instance profile, and the EC2 instance.
+# Runs the EKS bastion as an ECS Fargate task in a user-provided VPC/subnet.
+# Does NOT create VPC/subnets/NAT — expects the private subnet to already have
+# outbound connectivity (NAT gateway or VPC endpoints for ECS/SSM/ECR).
+#
+# Creates: security group, ECS task role, CloudWatch log group, ECS cluster
+# (new or reuse existing), task definition, and a 1-replica service with
+# ECS Exec enabled.
 #
 # Required env vars:
-#   AWS_REGION
-#
-# Optional env vars (from state):
-#   VPC_ID, PRIV_SUB_1
+#   AWS_REGION, ECS_CLUSTER_NAME, ECS_CLUSTER_MODE, VPC_ID, PRIV_SUB_1
+#     ECS_CLUSTER_MODE = "new" | "existing"
 #
 # Outputs:
-#   OUTPUT:BASTION_INSTANCE_ID
+#   OUTPUT:VPC_ID, OUTPUT:ECS_CLUSTER_NAME, OUTPUT:BASTION_SG_ID,
+#   OUTPUT:BASTION_SERVICE_NAME, OUTPUT:BASTION_TASK_FAMILY
 # =============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
 
-require_env AWS_REGION
+require_env AWS_REGION ECS_CLUSTER_NAME ECS_CLUSTER_MODE VPC_ID PRIV_SUB_1
+
+export AWS_DEFAULT_REGION="$AWS_REGION"
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
 
 SG_NAME="cdx-jit-k8s-hub-bastion-sg"
-ROLE_NAME="cdx-jit-k8s-hub-bastion-role"
-INSTANCE_PROFILE_NAME="cdx-jit-k8s-hub-bastion-profile"
-INSTANCE_NAME="cdx-jit-k8s-hub-bastion"
-INSTANCE_TYPE="t3.micro"
-TAGS="Key=owner,Value=cloudanix},{Key=purpose,Value=cdx-jit-k8s},{Key=service,Value=bastion},{Key=scope,Value=hub"
+ROLE_NAME="cdx-jit-k8s-bastion-ECSRole"
+LOG_GROUP="/ecs/cdx-jit-k8s/bastion"
+TASK_FAMILY="cdx-jit-k8s-bastion"
+SERVICE_NAME="cdx-jit-k8s-bastion"
+BASTION_IMAGE="public.ecr.aws/amazonlinux/amazonlinux:2023"
 
-# VPC_ID and PRIV_SUB_1 should come from orchestrator state
-require_env VPC_ID PRIV_SUB_1
+TAG_SPEC="{Key=owner,Value=cloudanix},{Key=purpose,Value=cdx-jit-k8s},{Key=created_by,Value=cloudanix},{Key=service,Value=bastion},{Key=scope,Value=hub}"
 
-VPC_CIDR=$(aws ec2 describe-vpcs --vpc-ids "$VPC_ID" --region "$AWS_REGION" \
-    --query "Vpcs[0].CidrBlock" --output text)
+info "Account: $ACCOUNT_ID | Region: $AWS_REGION"
+info "ECS cluster: $ECS_CLUSTER_NAME (mode: $ECS_CLUSTER_MODE)"
 
-if [[ -z "$VPC_CIDR" || "$VPC_CIDR" == "None" ]]; then
-    error "VPC $VPC_ID not found in region $AWS_REGION"
-    exit 1
-fi
-
-info "VPC: $VPC_ID ($VPC_CIDR)"
-info "Subnet: $PRIV_SUB_1"
+aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com 2>/dev/null || true
 
 # =============================================================================
-# SECURITY GROUP (idempotent)
+# VALIDATE VPC + SUBNET
+# =============================================================================
+
+step "Validate Network"
+VPC_CIDR=$(aws ec2 describe-vpcs --vpc-ids "$VPC_ID" \
+    --query "Vpcs[0].CidrBlock" --output text 2>/dev/null)
+if [[ -z "$VPC_CIDR" || "$VPC_CIDR" == "None" ]]; then
+    error "VPC $VPC_ID not found in region $AWS_REGION"; exit 1
+fi
+
+SUBNET_VPC=$(aws ec2 describe-subnets --subnet-ids "$PRIV_SUB_1" \
+    --query "Subnets[0].VpcId" --output text 2>/dev/null)
+if [[ "$SUBNET_VPC" != "$VPC_ID" ]]; then
+    error "Subnet $PRIV_SUB_1 does not belong to VPC $VPC_ID (belongs to $SUBNET_VPC)"; exit 1
+fi
+
+# Second subnet is optional; ECS service can run with a single subnet
+SUBNETS="$PRIV_SUB_1"
+if [[ -n "${PRIV_SUB_2:-}" ]]; then
+    SUB2_VPC=$(aws ec2 describe-subnets --subnet-ids "$PRIV_SUB_2" \
+        --query "Subnets[0].VpcId" --output text 2>/dev/null)
+    if [[ "$SUB2_VPC" == "$VPC_ID" ]]; then
+        SUBNETS="$PRIV_SUB_1,$PRIV_SUB_2"
+    fi
+fi
+ok "VPC: $VPC_ID ($VPC_CIDR) | Subnets: $SUBNETS"
+
+# =============================================================================
+# SECURITY GROUP
 # =============================================================================
 
 step "Security Group"
-SG_ID=$(aws ec2 describe-security-groups \
-    --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=$SG_NAME" \
-    --query "SecurityGroups[0].GroupId" --output text --region "$AWS_REGION" 2>/dev/null)
-
+SG_ID=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=$SG_NAME" \
+    --query "SecurityGroups[0].GroupId" --output text 2>/dev/null)
 if [[ -z "$SG_ID" || "$SG_ID" == "None" ]]; then
     SG_ID=$(aws ec2 create-security-group --group-name "$SG_NAME" \
-        --description "Bastion hub SG - SSM managed, no inbound SSH required" \
-        --vpc-id "$VPC_ID" --region "$AWS_REGION" \
-        --tag-specifications "ResourceType=security-group,Tags=[{Key=Name,Value=$SG_NAME},{$TAGS}]" \
+        --description "EKS JIT bastion SG - ECS Fargate, egress only (SSM/ECS Exec)" \
+        --vpc-id "$VPC_ID" \
+        --tag-specifications "ResourceType=security-group,Tags=[{Key=Name,Value=$SG_NAME},$TAG_SPEC]" \
         --query "GroupId" --output text)
-    aws ec2 authorize-security-group-egress --group-id "$SG_ID" \
-        --protocol "-1" --cidr "0.0.0.0/0" --region "$AWS_REGION" 2>/dev/null || true
+    aws ec2 authorize-security-group-egress --group-id "$SG_ID" --protocol "-1" --cidr "0.0.0.0/0" 2>/dev/null || true
     ok "SG created: $SG_ID"
 else
     ok "SG exists: $SG_ID"
 fi
 
 # =============================================================================
-# IAM ROLE + INSTANCE PROFILE (idempotent)
+# ECS TASK ROLE
 # =============================================================================
 
-step "IAM Role"
+step "ECS Task Role"
 ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text 2>/dev/null) || ROLE_ARN=""
 if [[ -z "$ROLE_ARN" ]]; then
     aws iam create-role --role-name "$ROLE_NAME" \
-        --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
-        --tags "Key=owner,Value=cloudanix" "Key=purpose,Value=cdx-jit-k8s" > /dev/null
-    ok "IAM Role created: $ROLE_NAME"
+        --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
+        --tags "Key=owner,Value=cloudanix" "Key=purpose,Value=cdx-jit-k8s" "Key=created_by,Value=cloudanix" "Key=service,Value=bastion" "Key=scope,Value=hub" > /dev/null
+    ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text)
+    ok "Task role created: $ROLE_NAME"
 else
-    ok "IAM Role exists: $ROLE_NAME"
+    ok "Task role exists: $ROLE_NAME"
 fi
+
 aws iam attach-role-policy --role-name "$ROLE_NAME" \
-    --policy-arn "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore" 2>/dev/null || true
+    --policy-arn "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 
-step "Instance Profile"
-EXISTING_PROFILE=$(aws iam get-instance-profile --instance-profile-name "$INSTANCE_PROFILE_NAME" \
-    --query 'InstanceProfile.Arn' --output text 2>/dev/null) || EXISTING_PROFILE=""
-if [[ -z "$EXISTING_PROFILE" ]]; then
-    aws iam create-instance-profile --instance-profile-name "$INSTANCE_PROFILE_NAME" > /dev/null
-    aws iam add-role-to-instance-profile --instance-profile-name "$INSTANCE_PROFILE_NAME" \
-        --role-name "$ROLE_NAME" 2>/dev/null || true
-    info "Waiting for instance profile propagation..."
-    sleep 10
-    ok "Instance profile created"
+cat > /tmp/bastion-exec-policy.json << 'EOF'
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "ECSExecSSMChannel",
+            "Effect": "Allow",
+            "Action": [
+                "ssmmessages:CreateControlChannel",
+                "ssmmessages:CreateDataChannel",
+                "ssmmessages:OpenControlChannel",
+                "ssmmessages:OpenDataChannel"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "EKSDescribe",
+            "Effect": "Allow",
+            "Action": [
+                "eks:DescribeCluster",
+                "eks:ListClusters"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+EOF
+aws iam put-role-policy --role-name "$ROLE_NAME" \
+    --policy-name "cdx-jit-k8s-bastion-exec" \
+    --policy-document file:///tmp/bastion-exec-policy.json
+ok "ECS Exec + EKS policies attached"
+
+info "Waiting for IAM propagation..."
+sleep 10
+
+# =============================================================================
+# CLOUDWATCH LOG GROUP
+# =============================================================================
+
+step "CloudWatch Log Group"
+aws logs create-log-group --log-group-name "$LOG_GROUP" 2>/dev/null || true
+ok "Log group: $LOG_GROUP"
+
+# =============================================================================
+# ECS CLUSTER (new or reuse existing)
+# =============================================================================
+
+step "ECS Cluster"
+CLUSTER_ARN=$(aws ecs describe-clusters --clusters "$ECS_CLUSTER_NAME" \
+    --query 'clusters[?status==`ACTIVE`].clusterArn | [0]' --output text 2>/dev/null)
+
+if [[ -n "$CLUSTER_ARN" && "$CLUSTER_ARN" != "None" ]]; then
+    ok "Using existing cluster: $ECS_CLUSTER_NAME"
+elif [[ "$ECS_CLUSTER_MODE" == "existing" ]]; then
+    error "ECS cluster '$ECS_CLUSTER_NAME' not found but mode is 'existing'."
+    error "Create it first (via jit-db/jit-vm setup) or choose 'new'."
+    exit 1
 else
-    aws iam add-role-to-instance-profile --instance-profile-name "$INSTANCE_PROFILE_NAME" \
-        --role-name "$ROLE_NAME" 2>/dev/null || true
-    ok "Instance profile exists"
+    CLUSTER_ARN=$(aws ecs create-cluster --cluster-name "$ECS_CLUSTER_NAME" \
+        --capacity-providers FARGATE FARGATE_SPOT \
+        --default-capacity-provider-strategy "capacityProvider=FARGATE,weight=1" \
+        --tags "key=owner,value=cloudanix" "key=purpose,value=cdx-jit-k8s" "key=created_by,value=cloudanix" \
+        --query 'cluster.clusterArn' --output text)
+    ok "Cluster created: $ECS_CLUSTER_NAME"
 fi
 
 # =============================================================================
-# EC2 INSTANCE (idempotent)
+# TASK DEFINITION
 # =============================================================================
 
-step "Bastion Instance"
-INSTANCE_ID=$(aws ec2 describe-instances \
-    --filters "Name=tag:Name,Values=$INSTANCE_NAME" "Name=vpc-id,Values=$VPC_ID" \
-              "Name=instance-state-name,Values=running,pending,stopped" \
-    --query "Reservations[0].Instances[0].InstanceId" --output text --region "$AWS_REGION" 2>/dev/null)
+step "Task Definition"
+TASK_DEF=$(jq -n \
+    --arg family "$TASK_FAMILY" \
+    --arg image "$BASTION_IMAGE" \
+    --arg role "$ROLE_ARN" \
+    --arg region "$AWS_REGION" \
+    --arg lg "$LOG_GROUP" \
+    '{
+        family: $family, networkMode: "awsvpc", requiresCompatibilities: ["FARGATE"],
+        cpu: "256", memory: "512", executionRoleArn: $role, taskRoleArn: $role,
+        containerDefinitions: [{
+            name: "bastion",
+            image: $image,
+            cpu: 0, essential: true,
+            command: ["sleep", "infinity"],
+            linuxParameters: {initProcessEnabled: true},
+            logConfiguration: {logDriver: "awslogs", options: {"awslogs-group": $lg, "awslogs-region": $region, "awslogs-stream-prefix": "bastion"}}
+        }],
+        tags: [
+            {key:"owner", value:"cloudanix"},
+            {key:"purpose", value:"cdx-jit-k8s"},
+            {key:"created_by", value:"cloudanix"},
+            {key:"service", value:"bastion"},
+            {key:"scope", value:"hub"}
+        ]
+    }')
+echo "$TASK_DEF" > /tmp/bastion-task-def.json
+aws ecs register-task-definition --cli-input-json file:///tmp/bastion-task-def.json > /dev/null
+ok "Task definition registered: $TASK_FAMILY"
 
-if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "None" ]]; then
-    AMI_ID=$(aws ec2 describe-images --owners amazon \
-        --filters "Name=name,Values=al2023-ami-2023*-x86_64" "Name=state,Values=available" \
-        --query "sort_by(Images, &CreationDate)[-1].ImageId" --output text --region "$AWS_REGION")
+# =============================================================================
+# ECS SERVICE (1 replica, ECS Exec enabled)
+# =============================================================================
 
-    INSTANCE_ID=$(aws ec2 run-instances --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" \
-        --subnet-id "$PRIV_SUB_1" --security-group-ids "$SG_ID" \
-        --iam-instance-profile "Name=$INSTANCE_PROFILE_NAME" \
-        --metadata-options "HttpTokens=required,HttpEndpoint=enabled" \
-        --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$INSTANCE_NAME},{$TAGS}]" \
-        --region "$AWS_REGION" --query "Instances[0].InstanceId" --output text)
-    aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$AWS_REGION"
-    ok "Instance launched: $INSTANCE_ID"
+step "ECS Service"
+NETWORK_CONFIG="awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SG_ID],assignPublicIp=DISABLED}"
+
+EXISTING_SVC=$(aws ecs describe-services --cluster "$ECS_CLUSTER_NAME" --services "$SERVICE_NAME" \
+    --query 'services[?status==`ACTIVE`].serviceName | [0]' --output text 2>/dev/null)
+if [[ -n "$EXISTING_SVC" && "$EXISTING_SVC" != "None" ]]; then
+    aws ecs update-service --cluster "$ECS_CLUSTER_NAME" --service "$SERVICE_NAME" \
+        --task-definition "$TASK_FAMILY" --enable-execute-command \
+        --force-new-deployment > /dev/null
+    ok "Service updated: $SERVICE_NAME"
 else
-    ok "Instance exists: $INSTANCE_ID"
-    # Start if stopped
-    STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --region "$AWS_REGION" \
-        --query "Reservations[0].Instances[0].State.Name" --output text)
-    if [[ "$STATE" == "stopped" ]]; then
-        aws ec2 start-instances --instance-ids "$INSTANCE_ID" --region "$AWS_REGION" > /dev/null
-        aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$AWS_REGION"
-        ok "Instance restarted"
-    fi
+    aws ecs create-service --cluster "$ECS_CLUSTER_NAME" \
+        --service-name "$SERVICE_NAME" \
+        --task-definition "$TASK_FAMILY" \
+        --desired-count 1 \
+        --launch-type FARGATE \
+        --platform-version LATEST \
+        --enable-execute-command \
+        --network-configuration "$NETWORK_CONFIG" \
+        --tags "key=owner,value=cloudanix" "key=purpose,value=cdx-jit-k8s" "key=created_by,value=cloudanix" "key=service,value=bastion" "key=scope,value=hub" > /dev/null
+    ok "Service created: $SERVICE_NAME"
 fi
 
-# =============================================================================
-# WAIT FOR SSM
-# =============================================================================
-
-step "SSM Agent"
-for i in $(seq 1 20); do
-    SSM_STATUS=$(aws ssm describe-instance-information \
-        --filters "Key=InstanceIds,Values=$INSTANCE_ID" --region "$AWS_REGION" \
-        --query "InstanceInformationList[0].PingStatus" --output text 2>/dev/null || echo "None")
-    if [[ "$SSM_STATUS" == "Online" ]]; then
-        ok "SSM agent online"; break
-    fi
-    sleep 5
-done
-
-if [[ "$SSM_STATUS" != "Online" ]]; then
-    warn "SSM agent not yet online — ensure subnet has NAT or VPC endpoints for SSM"
-fi
+info "Waiting for bastion service to stabilize..."
+aws ecs wait services-stable --cluster "$ECS_CLUSTER_NAME" --services "$SERVICE_NAME" 2>/dev/null || true
 
 # =============================================================================
 # OUTPUT
 # =============================================================================
 
-ok "Bastion setup complete (existing VPC)"
-echo "OUTPUT:BASTION_INSTANCE_ID=${INSTANCE_ID}"
+ok "Bastion setup complete (ECS Fargate, existing VPC)"
+echo "OUTPUT:VPC_ID=${VPC_ID}"
+echo "OUTPUT:ECS_CLUSTER_NAME=${ECS_CLUSTER_NAME}"
+echo "OUTPUT:BASTION_SG_ID=${SG_ID}"
+echo "OUTPUT:BASTION_SERVICE_NAME=${SERVICE_NAME}"
+echo "OUTPUT:BASTION_TASK_FAMILY=${TASK_FAMILY}"

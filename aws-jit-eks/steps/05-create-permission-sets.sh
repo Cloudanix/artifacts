@@ -7,8 +7,8 @@
 # identifiers for EKS access entry creation.
 #
 # Required env vars:
-#   AWS_REGION, SSO_INSTANCE_ARN, JIT_ACCOUNT_ID, BASTION_INSTANCE_ID,
-#   EKS_CLUSTER_NAME
+#   AWS_REGION, SSO_INSTANCE_ARN, JIT_ACCOUNT_ID, ECS_CLUSTER_NAME,
+#   BASTION_SERVICE_NAME
 #
 # Outputs:
 #   OUTPUT:PERMISSION_SET_ARN
@@ -18,7 +18,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
 
-require_env AWS_REGION SSO_INSTANCE_ARN JIT_ACCOUNT_ID BASTION_INSTANCE_ID EKS_CLUSTER_NAME
+require_env AWS_REGION SSO_INSTANCE_ARN JIT_ACCOUNT_ID ECS_CLUSTER_NAME BASTION_SERVICE_NAME
 
 # =============================================================================
 # CONFIGURATION
@@ -28,7 +28,7 @@ SESSION_DURATION="PT1H"
 
 info "SSO Instance: $SSO_INSTANCE_ARN"
 info "JIT Account: $JIT_ACCOUNT_ID"
-info "Bastion: $BASTION_INSTANCE_ID"
+info "ECS Cluster: $ECS_CLUSTER_NAME | Bastion service: $BASTION_SERVICE_NAME"
 info "EKS Cluster: $EKS_CLUSTER_NAME"
 
 PERMISSION_SETS=(
@@ -107,15 +107,32 @@ done
 
 step "SSM Inline Policy (first permission set)"
 
-# Add SSM session policy to the admin permission set for bastion access
+# Add ECS Exec policy to the admin permission set for bastion access.
+# Access to the Fargate bastion is via `aws ecs execute-command`, which opens
+# an SSM session channel into the running task.
 ADMIN_PS_ARN=$(find_permission_set_arn "AmazonEKSClusterAdminPolicy")
 if [[ -n "$ADMIN_PS_ARN" ]]; then
-    cat > /tmp/eks-ssm-policy.json << EOF
+    cat > /tmp/eks-bastion-policy.json << EOF
 {
     "Version": "2012-10-17",
     "Statement": [
         {
-            "Sid": "SSMBastion",
+            "Sid": "ECSExecBastion",
+            "Effect": "Allow",
+            "Action": [
+                "ecs:ExecuteCommand",
+                "ecs:DescribeTasks",
+                "ecs:ListTasks",
+                "ecs:DescribeServices"
+            ],
+            "Resource": [
+                "arn:aws:ecs:${AWS_REGION}:${JIT_ACCOUNT_ID}:cluster/${ECS_CLUSTER_NAME}",
+                "arn:aws:ecs:${AWS_REGION}:${JIT_ACCOUNT_ID}:task/${ECS_CLUSTER_NAME}/*",
+                "arn:aws:ecs:${AWS_REGION}:${JIT_ACCOUNT_ID}:service/${ECS_CLUSTER_NAME}/*"
+            ]
+        },
+        {
+            "Sid": "SSMExecChannel",
             "Effect": "Allow",
             "Action": [
                 "ssm:StartSession",
@@ -123,18 +140,9 @@ if [[ -n "$ADMIN_PS_ARN" ]]; then
                 "ssm:TerminateSession"
             ],
             "Resource": [
-                "arn:aws:ec2:${AWS_REGION}:${JIT_ACCOUNT_ID}:instance/${BASTION_INSTANCE_ID}",
+                "arn:aws:ecs:${AWS_REGION}:${JIT_ACCOUNT_ID}:task/${ECS_CLUSTER_NAME}/*",
                 "arn:aws:ssm:${AWS_REGION}::document/AWS-StartPortForwardingSessionToRemoteHost"
             ]
-        },
-        {
-            "Sid": "SSMDescribe",
-            "Effect": "Allow",
-            "Action": [
-                "ssm:DescribeInstanceInformation",
-                "ec2:DescribeInstances"
-            ],
-            "Resource": "*"
         }
     ]
 }
@@ -143,9 +151,9 @@ EOF
     aws sso-admin put-inline-policy-to-permission-set \
         --instance-arn "$SSO_INSTANCE_ARN" \
         --permission-set-arn "$ADMIN_PS_ARN" \
-        --inline-policy file:///tmp/eks-ssm-policy.json \
+        --inline-policy file:///tmp/eks-bastion-policy.json \
         --region "$AWS_REGION" 2>/dev/null || true
-    ok "SSM policy attached to AmazonEKSClusterAdminPolicy"
+    ok "ECS Exec bastion policy attached to AmazonEKSClusterAdminPolicy"
 fi
 
 # =============================================================================

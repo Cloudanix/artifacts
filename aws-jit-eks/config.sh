@@ -12,8 +12,8 @@ SETUP_DISPLAY_NAME="AWS JIT EKS (Kubernetes)"
 
 SCOPE_MODES=("new-vpc" "existing-vpc")
 SCOPE_MODE_LABELS=(
-    "New VPC (bastion hub with VPC peering to EKS)"
-    "Existing VPC (bastion in existing network)"
+    "New VPC (create hub VPC + ECS bastion, peer to EKS)"
+    "Existing VPC (ECS bastion in existing network)"
 )
 
 # =============================================================================
@@ -72,9 +72,12 @@ CONFIG_FIELDS=(
     "EKS_ACCOUNT_ID|aws_account_id||EKS Cluster Account ID|*|false"
     "MGMT_ACCOUNT_ID|aws_account_id||Management Account ID (SSO)|*|false"
     "SSO_INSTANCE_ARN|nonempty|__AUTO_SSO__|SSO Instance ARN|*|false"
+    "ECS_CLUSTER_MODE|nonempty|new|ECS Cluster Mode (new/existing)|*|false"
+    "ECS_CLUSTER_NAME|alphanumeric_dash|cdx-jit-k8s-cluster|ECS Cluster Name (new or existing to reuse)|*|false"
     "VPC_CIDR|cidr|10.200.0.0/16|Hub VPC CIDR Block|new-vpc|false"
     "VPC_ID|nonempty||Existing VPC ID (for bastion)|existing-vpc|false"
-    "PRIV_SUB_1|nonempty||Private Subnet ID (for bastion)|existing-vpc|false"
+    "PRIV_SUB_1|nonempty||Private Subnet 1 ID (for bastion)|existing-vpc|false"
+    "PRIV_SUB_2|nonempty||Private Subnet 2 ID (optional)|existing-vpc|false"
     "EKS_VPC_ID|nonempty||EKS VPC ID|*|false"
     "EKS_VPC_CIDR|cidr||EKS VPC CIDR|*|false"
     "EKS_CLUSTER_NAME|nonempty||EKS Cluster Name|*|false"
