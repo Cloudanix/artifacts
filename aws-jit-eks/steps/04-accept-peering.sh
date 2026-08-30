@@ -17,7 +17,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
 
-require_env AWS_REGION PEERING_CONNECTION_ID VPC_CIDR EKS_VPC_ID
+require_env AWS_REGION PEERING_CONNECTION_ID EKS_VPC_ID
+
+# VPC_CIDR (hub side) may not be a config field in existing-vpc scope.
+# Fall back to reading the requester CIDR directly from the peering connection.
+if [[ -z "${VPC_CIDR:-}" ]]; then
+    VPC_CIDR=$(aws ec2 describe-vpc-peering-connections \
+        --vpc-peering-connection-ids "$PEERING_CONNECTION_ID" \
+        --query 'VpcPeeringConnections[0].RequesterVpcInfo.CidrBlock' --output text \
+        --region "$AWS_REGION" 2>/dev/null)
+fi
+if [[ -z "$VPC_CIDR" || "$VPC_CIDR" == "None" ]]; then
+    error "Could not determine hub VPC CIDR (VPC_CIDR unset and peering lookup failed)"
+    exit 1
+fi
 
 # =============================================================================
 # ACCEPT PEERING

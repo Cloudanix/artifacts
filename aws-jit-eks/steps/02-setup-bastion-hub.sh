@@ -329,6 +329,7 @@ aws ecs wait services-stable --cluster "$ECS_CLUSTER_NAME" --services "$SERVICE_
 
 ok "Bastion hub setup complete (ECS Fargate)"
 echo "OUTPUT:VPC_ID=${VPC_ID}"
+echo "OUTPUT:VPC_CIDR=${VPC_CIDR}"
 echo "OUTPUT:ECS_CLUSTER_NAME=${ECS_CLUSTER_NAME}"
 echo "OUTPUT:BASTION_SG_ID=${SG_ID}"
 echo "OUTPUT:BASTION_SERVICE_NAME=${SERVICE_NAME}"
