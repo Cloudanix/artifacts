@@ -43,28 +43,42 @@ info "Region: $AWS_REGION | Project: $PROJECT_NAME | Account: $ACCOUNT_ID"
 info "Scope hint: ${SCOPE_MODE:-<none>}"
 
 # =============================================================================
-# 1. DELETE ECS SERVICES (all services in the cluster)
+# DISCOVER ALL SETUPS: base cluster + numbered (cdx-jit-db-cluster, -cluster-2, ...)
+# =============================================================================
+
+# Find all clusters whose name starts with the base cluster name
+ALL_CLUSTERS=$(aws ecs list-clusters --query 'clusterArns' --output text 2>/dev/null \
+    | tr '\t' '\n' | awk -F/ '{print $NF}' | grep -E "^${CLUSTER_NAME}(-[0-9]+)?$" || echo "")
+
+if [[ -z "$ALL_CLUSTERS" ]]; then
+    ALL_CLUSTERS="$CLUSTER_NAME"
+fi
+info "Clusters to clean: $(echo $ALL_CLUSTERS | tr '\n' ' ')"
+
+# =============================================================================
+# 1. DELETE ECS SERVICES (across all setups)
 # =============================================================================
 
 step "ECS Services"
-if aws ecs describe-clusters --clusters "$CLUSTER_NAME" \
-    --query 'clusters[?status==`ACTIVE`]' --output text 2>/dev/null | grep -q .; then
-    for SVC in $(aws ecs list-services --cluster "$CLUSTER_NAME" --query 'serviceArns' --output text 2>/dev/null); do
-        SN=$(echo "$SVC" | awk -F/ '{print $NF}')
-        aws ecs update-service --cluster "$CLUSTER_NAME" --service "$SN" --desired-count 0 > /dev/null 2>&1 || true
-        aws ecs delete-service --cluster "$CLUSTER_NAME" --service "$SN" --force > /dev/null 2>&1 || true
-        ok "Service deleted: $SN"
-    done
-else
-    ok "No active cluster found: $CLUSTER_NAME"
-fi
+for CN in $ALL_CLUSTERS; do
+    if aws ecs describe-clusters --clusters "$CN" \
+        --query 'clusters[?status==`ACTIVE`]' --output text 2>/dev/null | grep -q .; then
+        for SVC in $(aws ecs list-services --cluster "$CN" --query 'serviceArns' --output text 2>/dev/null); do
+            SN=$(echo "$SVC" | awk -F/ '{print $NF}')
+            aws ecs update-service --cluster "$CN" --service "$SN" --desired-count 0 > /dev/null 2>&1 || true
+            aws ecs delete-service --cluster "$CN" --service "$SN" --force > /dev/null 2>&1 || true
+            ok "Service deleted: $CN/$SN"
+        done
+    fi
+done
 
 # =============================================================================
-# 2. DEREGISTER TASK DEFINITIONS
+# 2. DEREGISTER TASK DEFINITIONS (base + numbered families)
 # =============================================================================
 
 step "Task Definitions"
 for FAM in "${PROJECT_NAME}-proxy-sql" "${PROJECT_NAME}-proxy-server" proxysql proxyserver-task query-logging-task dam-server-task postgresql-task; do
+    # matches "proxysql", "proxysql-2", etc. via family-prefix
     for TD in $(aws ecs list-task-definitions --family-prefix "$FAM" --query 'taskDefinitionArns' --output text 2>/dev/null); do
         aws ecs deregister-task-definition --task-definition "$TD" > /dev/null 2>&1 || true
     done
@@ -72,51 +86,59 @@ done
 ok "Task definitions deregistered"
 
 # =============================================================================
-# 3. DELETE ECS CLUSTER
+# 3. DELETE ECS CLUSTERS
 # =============================================================================
 
-step "ECS Cluster"
-aws ecs delete-cluster --cluster "$CLUSTER_NAME" > /dev/null 2>&1 || true
-ok "Cluster deleted: $CLUSTER_NAME"
+step "ECS Clusters"
+for CN in $ALL_CLUSTERS; do
+    aws ecs delete-cluster --cluster "$CN" > /dev/null 2>&1 || true
+    ok "Cluster deleted: $CN"
+done
 
 # =============================================================================
-# 4. DELETE SERVICE CONNECT NAMESPACE
+# 4. DELETE SERVICE CONNECT NAMESPACES (base + numbered)
 # =============================================================================
 
-step "Service Connect Namespace"
-NS_ID=$(aws servicediscovery list-namespaces \
-    --query "Namespaces[?Name=='${NAMESPACE_NAME}'].Id | [0]" --output text 2>/dev/null)
-if [[ -n "$NS_ID" && "$NS_ID" != "None" ]]; then
-    # delete any services in the namespace first
+step "Service Connect Namespaces"
+for NS_ID in $(aws servicediscovery list-namespaces \
+    --query "Namespaces[?starts_with(Name, '${NAMESPACE_NAME}')].Id" --output text 2>/dev/null); do
+    [[ -z "$NS_ID" || "$NS_ID" == "None" ]] && continue
     for SVC in $(aws servicediscovery list-services \
         --filters "Name=NAMESPACE_ID,Values=$NS_ID" --query 'Services[*].Id' --output text 2>/dev/null); do
         aws servicediscovery delete-service --id "$SVC" 2>/dev/null || true
     done
     aws servicediscovery delete-namespace --id "$NS_ID" 2>/dev/null || true
-    ok "Namespace deleted: $NAMESPACE_NAME"
-fi
+    ok "Namespace deleted: $NS_ID"
+done
 
 # =============================================================================
 # 5. DELETE EFS (by Name tag)
 # =============================================================================
 
 step "EFS"
-EFS_ID=$(aws efs describe-file-systems \
-    --query "FileSystems[?Tags[?Key=='Name'&&Value=='${PROJECT_NAME}-efs']].FileSystemId | [0]" \
+# Match base and numbered EFS (cdx-jit-db-efs, cdx-jit-db-efs-2, ...)
+EFS_IDS=$(aws efs describe-file-systems \
+    --query "FileSystems[?Tags[?Key=='Name'&&starts_with(Value, '${PROJECT_NAME}-efs')]].FileSystemId" \
     --output text 2>/dev/null)
-if [[ -n "$EFS_ID" && "$EFS_ID" != "None" ]]; then
+for EFS_ID in $EFS_IDS; do
+    [[ -z "$EFS_ID" || "$EFS_ID" == "None" ]] && continue
     for MT in $(aws efs describe-mount-targets --file-system-id "$EFS_ID" \
         --query 'MountTargets[*].MountTargetId' --output text 2>/dev/null); do
         aws efs delete-mount-target --mount-target-id "$MT" 2>/dev/null || true
     done
+done
+if [[ -n "$EFS_IDS" ]]; then
     info "Waiting for mount targets to delete..."
     sleep 30
-    for AP in $(aws efs describe-access-points --file-system-id "$EFS_ID" \
-        --query 'AccessPoints[*].AccessPointId' --output text 2>/dev/null); do
-        aws efs delete-access-point --access-point-id "$AP" 2>/dev/null || true
+    for EFS_ID in $EFS_IDS; do
+        [[ -z "$EFS_ID" || "$EFS_ID" == "None" ]] && continue
+        for AP in $(aws efs describe-access-points --file-system-id "$EFS_ID" \
+            --query 'AccessPoints[*].AccessPointId' --output text 2>/dev/null); do
+            aws efs delete-access-point --access-point-id "$AP" 2>/dev/null || true
+        done
+        aws efs delete-file-system --file-system-id "$EFS_ID" 2>/dev/null || true
+        ok "EFS deleted: $EFS_ID"
     done
-    aws efs delete-file-system --file-system-id "$EFS_ID" 2>/dev/null || true
-    ok "EFS deleted: $EFS_ID"
 fi
 
 # =============================================================================
@@ -230,7 +252,9 @@ fi
 # =============================================================================
 
 step "CloudWatch Log Groups"
-for LG in "/ecs/${PROJECT_NAME}/proxyserver" "/ecs/${PROJECT_NAME}/proxysql" "/ecs/${PROJECT_NAME}/query-logging" "/ecs/${PROJECT_NAME}/dam-server" "/ecs/${PROJECT_NAME}/postgresql" "/ecs/${PROJECT_NAME}"; do
+# Delete all log groups under /ecs/<project>/ (catches base + numbered suffixes)
+for LG in $(aws logs describe-log-groups --log-group-name-prefix "/ecs/${PROJECT_NAME}" \
+    --query 'logGroups[*].logGroupName' --output text 2>/dev/null); do
     aws logs delete-log-group --log-group-name "$LG" 2>/dev/null || true
 done
 ok "Log groups deleted"
