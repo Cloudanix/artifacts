@@ -74,6 +74,10 @@ info "Account: $ACCOUNT_ID | Region: $AWS_REGION | Project: $PROJECT_NAME"
 info "Setup #${SETUP_NUMBER} | Cluster: $ECS_CLUSTER_NAME | Namespace: $NAMESPACE_NAME"
 info "VPC: $VPC_ID | Subnets: $PRIVATE_SUBNET_1_ID, $PRIVATE_SUBNET_2_ID"
 
+# EFS mount target DNS resolution requires VPC DNS hostnames + support
+aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-support '{"Value":true}' 2>/dev/null || true
+aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-hostnames '{"Value":true}' 2>/dev/null || true
+
 # =============================================================================
 # HELPER: EXTEND IAM POLICY
 # =============================================================================

@@ -60,6 +60,16 @@ info "Account: $ACCOUNT_ID | Region: $AWS_REGION | Project: $PROJECT_NAME"
 info "VPC: $VPC_ID | Subnets: $PRIVATE_SUBNET_1_ID, $PRIVATE_SUBNET_2_ID"
 
 # =============================================================================
+# ENABLE VPC DNS (required for EFS mount target DNS resolution)
+# =============================================================================
+
+step "VPC DNS Settings"
+# EFS mounts resolve fs-xxx.efs.<region>.amazonaws.com — needs DNS hostnames+support
+aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-support '{"Value":true}' 2>/dev/null || true
+aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-hostnames '{"Value":true}' 2>/dev/null || true
+ok "DNS hostnames + support enabled on $VPC_ID"
+
+# =============================================================================
 # ECS SERVICE-LINKED ROLE
 # =============================================================================
 
@@ -83,52 +93,64 @@ fi
 
 # Attach managed policies
 aws iam attach-role-policy --role-name "$ROLE_NAME" \
-    --policy-arn "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy" 2>/dev/null || true
+    --policy-arn "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 aws iam attach-role-policy --role-name "$ROLE_NAME" \
-    --policy-arn "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore" 2>/dev/null || true
+    --policy-arn "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 
 # Secrets Manager policy
 SECRETS_POLICY_NAME="${PROJECT_NAME}-SecretsAccess"
-SECRETS_POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='${SECRETS_POLICY_NAME}'].Arn | [0]" --output text 2>/dev/null)
-if [[ -z "$SECRETS_POLICY_ARN" || "$SECRETS_POLICY_ARN" == "None" ]]; then
+SECRETS_POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${SECRETS_POLICY_NAME}"
+if ! aws iam get-policy --policy-arn "$SECRETS_POLICY_ARN" > /dev/null 2>&1; then
     SECRETS_POLICY_ARN=$(aws iam create-policy --policy-name "$SECRETS_POLICY_NAME" \
         --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"secretsmanager:GetSecretValue\"],\"Resource\":\"arn:aws:secretsmanager:${AWS_REGION}:${ACCOUNT_ID}:secret:*\"}]}" \
         --query 'Policy.Arn' --output text)
 fi
-aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$SECRETS_POLICY_ARN" 2>/dev/null || true
+aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$SECRETS_POLICY_ARN"
 
 # EFS access policy
 EFS_POLICY_NAME="${PROJECT_NAME}-EFSAccess"
-EFS_POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='${EFS_POLICY_NAME}'].Arn | [0]" --output text 2>/dev/null)
-if [[ -z "$EFS_POLICY_ARN" || "$EFS_POLICY_ARN" == "None" ]]; then
+EFS_POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${EFS_POLICY_NAME}"
+if ! aws iam get-policy --policy-arn "$EFS_POLICY_ARN" > /dev/null 2>&1; then
     EFS_POLICY_ARN=$(aws iam create-policy --policy-name "$EFS_POLICY_NAME" \
         --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"elasticfilesystem:ClientMount\",\"elasticfilesystem:ClientWrite\",\"elasticfilesystem:DescribeMountTargets\"],\"Resource\":\"arn:aws:elasticfilesystem:${AWS_REGION}:${ACCOUNT_ID}:file-system/*\"}]}" \
         --query 'Policy.Arn' --output text)
 fi
-aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$EFS_POLICY_ARN" 2>/dev/null || true
+aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$EFS_POLICY_ARN"
 
 # S3 access policy
 S3_POLICY_NAME="${PROJECT_NAME}-S3Access"
-S3_POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='${S3_POLICY_NAME}'].Arn | [0]" --output text 2>/dev/null)
-if [[ -z "$S3_POLICY_ARN" || "$S3_POLICY_ARN" == "None" ]]; then
+S3_POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${S3_POLICY_NAME}"
+if ! aws iam get-policy --policy-arn "$S3_POLICY_ARN" > /dev/null 2>&1; then
     S3_POLICY_ARN=$(aws iam create-policy --policy-name "$S3_POLICY_NAME" \
         --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:*\",\"s3-object-lambda:*\"],\"Resource\":[\"arn:aws:s3:::${BUCKET_NAME}\",\"arn:aws:s3:::${BUCKET_NAME}/*\"]}]}" \
         --query 'Policy.Arn' --output text)
 fi
-aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$S3_POLICY_ARN" 2>/dev/null || true
+aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$S3_POLICY_ARN"
 
 # CloudWatch Logs policy
 LOGS_POLICY_NAME="${PROJECT_NAME}-CloudWatchLogs"
-LOGS_POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='${LOGS_POLICY_NAME}'].Arn | [0]" --output text 2>/dev/null)
-if [[ -z "$LOGS_POLICY_ARN" || "$LOGS_POLICY_ARN" == "None" ]]; then
+LOGS_POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${LOGS_POLICY_NAME}"
+if ! aws iam get-policy --policy-arn "$LOGS_POLICY_ARN" > /dev/null 2>&1; then
     LOG_ARNS="\"arn:aws:logs:${AWS_REGION}:${ACCOUNT_ID}:log-group:/ecs/${PROJECT_NAME}/*\""
     LOGS_POLICY_ARN=$(aws iam create-policy --policy-name "$LOGS_POLICY_NAME" \
         --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"logs:*\",\"cloudwatch:GenerateQuery\"],\"Resource\":[${LOG_ARNS}]}]}" \
         --query 'Policy.Arn' --output text)
 fi
-aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$LOGS_POLICY_ARN" 2>/dev/null || true
+aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$LOGS_POLICY_ARN"
 
 ok "All IAM policies attached to $ROLE_NAME"
+
+# Wait for IAM policy propagation (AWS eventual consistency)
+info "Waiting for IAM policies to propagate..."
+sleep 10
+
+ATTACHED_COUNT=$(aws iam list-attached-role-policies --role-name "$ROLE_NAME" \
+    --query 'length(AttachedPolicies)' --output text)
+if [[ "$ATTACHED_COUNT" -lt 4 ]]; then
+    error "Expected at least 4 policies attached to $ROLE_NAME, found $ATTACHED_COUNT"
+    exit 1
+fi
+ok "Verified: $ATTACHED_COUNT policies attached"
 
 # =============================================================================
 # CLOUDWATCH LOG GROUPS

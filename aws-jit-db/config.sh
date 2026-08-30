@@ -107,7 +107,7 @@ CONFIG_FIELDS=(
     "PROJECT_NAME|alphanumeric_dash|cdx-jit-db|Project Name|new-vpc,existing-vpc,same-account,onboard-new-account|false"
     "ECS_CLUSTER_NAME|alphanumeric_dash|cdx-jit-db-cluster|ECS Cluster Name|new-vpc,existing-vpc|false"
     "IMAGE_TAG|semver_or_latest|latest|Image Tag|new-vpc,existing-vpc,same-account|false"
-    "ENABLE_DAM|boolean|false|Enable Database Activity Monitoring (DAM)|new-vpc,existing-vpc,same-account|false"
+    "ENABLE_DAM|boolean|false|Enable Database Activity Monitoring (DAM)? (true/false)|new-vpc,existing-vpc,same-account|false"
     "VPC_CIDR|cidr|10.50.0.0/16|VPC CIDR Block|new-vpc|false"
     "VPC_ID|nonempty||Existing VPC ID|existing-vpc,same-account|false"
     "PRIVATE_SUBNET_1_ID|nonempty||Private Subnet 1 ID|existing-vpc,same-account|false"
