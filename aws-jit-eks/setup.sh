@@ -30,43 +30,23 @@ STATE_FILE="$SCRIPT_DIR/.state.json"
 # =============================================================================
 
 if [[ "${1:-}" == "--cleanup" ]]; then
-    if [[ ! -f "$STATE_FILE" ]]; then
-        error "No state file found. Nothing to clean up."
-        exit 1
-    fi
-
-    local_state=$(load_state "$STATE_FILE") || {
-        error "State file is corrupted. Cannot determine what to clean up."
-        exit 1
-    }
-
     echo ""
     echo -e "${_CLR_BOLD}=== Cleanup: $SETUP_DISPLAY_NAME ===${_CLR_RESET}"
     echo ""
-    echo "The following steps were completed:"
-    echo ""
 
-    scope_mode=$(echo "$local_state" | jq -r '.scope_mode')
-    steps_str="${STEPS_FOR_MODE[$scope_mode]}"
-    all_steps=($steps_str)
-
-    completed_steps=()
-    for s in "${all_steps[@]}"; do
-        if is_step_complete "$STATE_FILE" "$s"; then
-            label="${STEP_LABELS[$s]:-$s}"
-            account="${STEP_ACCOUNT[$s]:-unknown}"
-            echo "  ✓ $label (${ACCOUNT_LABELS[$account]:-$account})"
-            completed_steps+=("$s")
+    if [[ -f "$STATE_FILE" ]]; then
+        info "State file found — will use it for resource hints."
+        if load_state "$STATE_FILE" > /dev/null 2>&1; then
+            scope_mode=$(jq -r '.scope_mode // "unknown"' "$STATE_FILE" 2>/dev/null)
+            info "Recorded scope: $scope_mode"
         fi
-    done
-
-    echo ""
-    if [[ ${#completed_steps[@]} -eq 0 ]]; then
-        info "No steps completed. Nothing to clean up."
-        exit 0
+    else
+        warn "No state file found — cleanup will DISCOVER resources by name/tag."
+        info "This finds JIT EKS resources (bastion, SG, role, peering) automatically."
     fi
 
-    if ! prompt_yes_no "Proceed with cleanup? This will remove all created resources" "n"; then
+    echo ""
+    if ! prompt_yes_no "Proceed with cleanup? This will remove JIT EKS resources it finds" "n"; then
         info "Cleanup cancelled."
         exit 0
     fi
@@ -74,7 +54,9 @@ if [[ "${1:-}" == "--cleanup" ]]; then
     if [[ -f "$SCRIPT_DIR/cleanup/cleanup.sh" ]]; then
         source "$SCRIPT_DIR/cleanup/cleanup.sh"
     else
-        warn "No cleanup script found at $SCRIPT_DIR/cleanup/cleanup.sh"
+        error "No cleanup script found at $SCRIPT_DIR/cleanup/cleanup.sh"
+        error "Re-install to fetch it: curl ... | bash -s -- $SETUP_TYPE"
+        exit 1
     fi
     exit 0
 fi
