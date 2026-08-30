@@ -160,6 +160,13 @@ if [[ "$RESUME_MODE" == false ]]; then
     # Auto-detect values for smart defaults
     _CURRENT_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null || echo "")
     _SSO_INSTANCE_ARN=$(aws sso-admin list-instances --query "Instances[0].InstanceArn" --output text 2>/dev/null || echo "")
+    # Discover existing hub VPC (for onboard scopes) via the ECS security group
+    _HUB_ECS_SG=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=cdx-jit-db-ecs-sg" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "")
+    _HUB_VPC=""; _HUB_CIDR=""
+    if [[ -n "$_HUB_ECS_SG" && "$_HUB_ECS_SG" != "None" ]]; then
+        _HUB_VPC=$(aws ec2 describe-security-groups --group-ids "$_HUB_ECS_SG" --query 'SecurityGroups[0].VpcId' --output text 2>/dev/null || echo "")
+        [[ -n "$_HUB_VPC" && "$_HUB_VPC" != "None" ]] && _HUB_CIDR=$(aws ec2 describe-vpcs --vpc-ids "$_HUB_VPC" --query 'Vpcs[0].CidrBlock' --output text 2>/dev/null || echo "")
+    fi
 
     step "Configuration"
     echo ""
@@ -187,6 +194,10 @@ if [[ "$RESUME_MODE" == false ]]; then
         # Resolve auto-defaults
         if [[ "$field_default" == "__AUTO_SSO__" ]]; then
             field_default="${_SSO_INSTANCE_ARN:-}"
+        elif [[ "$field_default" == "__AUTO_HUB_VPC__" ]]; then
+            field_default="${_HUB_VPC:-}"
+        elif [[ "$field_default" == "__AUTO_HUB_CIDR__" ]]; then
+            field_default="${_HUB_CIDR:-}"
         elif [[ "$field_default" == "__AUTO_BUCKET__" ]]; then
             # Use JIT account ID if already collected, otherwise current account
             _jit_id=$(get_config_value "$STATE_FILE" "JIT_ACCOUNT_ID" 2>/dev/null || echo "")
@@ -250,6 +261,12 @@ fi
 if [[ "$RESUME_MODE" == true ]]; then
     _CURRENT_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null || echo "")
     _SSO_INSTANCE_ARN=$(aws sso-admin list-instances --query "Instances[0].InstanceArn" --output text 2>/dev/null || echo "")
+    _HUB_ECS_SG=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=cdx-jit-db-ecs-sg" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "")
+    _HUB_VPC=""; _HUB_CIDR=""
+    if [[ -n "$_HUB_ECS_SG" && "$_HUB_ECS_SG" != "None" ]]; then
+        _HUB_VPC=$(aws ec2 describe-security-groups --group-ids "$_HUB_ECS_SG" --query 'SecurityGroups[0].VpcId' --output text 2>/dev/null || echo "")
+        [[ -n "$_HUB_VPC" && "$_HUB_VPC" != "None" ]] && _HUB_CIDR=$(aws ec2 describe-vpcs --vpc-ids "$_HUB_VPC" --query 'Vpcs[0].CidrBlock' --output text 2>/dev/null || echo "")
+    fi
 
     MISSING_CONFIG=false
     for field_def in "${CONFIG_FIELDS[@]}"; do
@@ -275,6 +292,10 @@ if [[ "$RESUME_MODE" == true ]]; then
 
             if [[ "$field_default" == "__AUTO_SSO__" ]]; then
                 field_default="${_SSO_INSTANCE_ARN:-}"
+            elif [[ "$field_default" == "__AUTO_HUB_VPC__" ]]; then
+                field_default="${_HUB_VPC:-}"
+            elif [[ "$field_default" == "__AUTO_HUB_CIDR__" ]]; then
+                field_default="${_HUB_CIDR:-}"
             elif [[ "$field_default" == "__AUTO_BUCKET__" ]]; then
                 _jit_id=$(get_config_value "$STATE_FILE" "JIT_ACCOUNT_ID" 2>/dev/null || echo "")
                 field_default="cdx-jit-db-logs-${_jit_id:-${_CURRENT_ACCOUNT_ID:-unknown}}"

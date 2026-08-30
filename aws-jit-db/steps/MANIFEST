@@ -8,3 +8,5 @@
 06-extend-role-trust.sh
 07-update-assume-role.sh
 08-create-permission-set.sh
+09-onboard-rds-peered.sh
+10-onboard-peering.sh

@@ -18,7 +18,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
 
-require_env AWS_REGION PEERING_CONNECTION_ID VPC_CIDR DB_VPC_ID DB_SECURITY_GROUP_IDS
+require_env AWS_REGION PEERING_CONNECTION_ID DB_VPC_ID DB_SECURITY_GROUP_IDS
+
+# VPC_CIDR is the hub (requester) CIDR. In onboard-new-account scope it's not a
+# config field — fall back to HUB_VPC_CIDR output, then to the peering itself.
+if [[ -z "${VPC_CIDR:-}" ]]; then
+    VPC_CIDR="${HUB_VPC_CIDR:-}"
+fi
+if [[ -z "$VPC_CIDR" ]]; then
+    VPC_CIDR=$(aws ec2 describe-vpc-peering-connections \
+        --vpc-peering-connection-ids "$PEERING_CONNECTION_ID" \
+        --query 'VpcPeeringConnections[0].RequesterVpcInfo.CidrBlock' --output text \
+        --region "$AWS_REGION" 2>/dev/null)
+fi
+if [[ -z "$VPC_CIDR" || "$VPC_CIDR" == "None" ]]; then
+    error "Could not determine hub VPC CIDR"; exit 1
+fi
 
 # =============================================================================
 # ACCEPT PEERING
