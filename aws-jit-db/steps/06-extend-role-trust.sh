@@ -6,7 +6,7 @@
 # role to allow assumption from the ECS task role in the JIT workload account.
 #
 # Required env vars:
-#   AWS_REGION, JIT_ACCOUNT_ID, ECS_CLUSTER_NAME
+#   AWS_REGION, JIT_ACCOUNT_ID
 #
 # Outputs:
 #   OUTPUT:TRUST_UPDATED=true
@@ -16,7 +16,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
 
-require_env AWS_REGION JIT_ACCOUNT_ID ECS_CLUSTER_NAME
+require_env AWS_REGION JIT_ACCOUNT_ID
 
 # =============================================================================
 # CONFIGURATION
