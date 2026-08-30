@@ -98,7 +98,9 @@ prompt_with_default() {
     local prompt="$1"
     local default_value="$2"
     local user_input
-    read -rp "$prompt [$default_value]: " user_input
+    # -e enables readline editing so Backspace/Delete/arrow keys work correctly
+    # (without it, Backspace is captured literally as ^? / 0x7F)
+    read -erp "$prompt [$default_value]: " user_input
     echo "${user_input:-$default_value}"
 }
 
@@ -110,7 +112,7 @@ prompt_yes_no() {
     local yn
     local attempts=0
     while true; do
-        read -rp "$prompt (y/n) [$default_value]: " yn
+        read -erp "$prompt (y/n) [$default_value]: " yn
         yn="${yn:-$default_value}"
         case "$yn" in
             [Yy]* ) return 0;;
@@ -151,7 +153,7 @@ prompt_selection() {
 
     while true; do
         local choice
-        read -rp "Select option [1-$count]: " choice
+        read -erp "Select option [1-$count]: " choice
 
         # Validate: must be a number in range
         if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le "$count" ]]; then
