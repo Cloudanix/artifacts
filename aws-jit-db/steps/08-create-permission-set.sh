@@ -21,13 +21,27 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
 
-require_env AWS_REGION SSO_INSTANCE_ARN PERMISSION_SET_NAME JIT_ACCOUNT_ID ECS_CLUSTER_NAME
+require_env AWS_REGION SSO_INSTANCE_ARN JIT_ACCOUNT_ID
 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
 
 SESSION_DURATION="PT8H"
+
+# Defaults for fields not collected in every scope (e.g. same-account).
+PERMISSION_SET_NAME="${PERMISSION_SET_NAME:-cdx-EcsSsmAccess}"
+PROJECT_NAME="${PROJECT_NAME:-cdx-jit-db}"
+# same-account derives the cluster as <project>-cluster-<setup#>; otherwise
+# ECS_CLUSTER_NAME is provided directly.
+if [[ -z "${ECS_CLUSTER_NAME:-}" ]]; then
+    if [[ -n "${SETUP_NUMBER:-}" ]]; then
+        ECS_CLUSTER_NAME="${PROJECT_NAME}-cluster-${SETUP_NUMBER}"
+    else
+        ECS_CLUSTER_NAME="${PROJECT_NAME}-cluster"
+    fi
+fi
+
 # Generate unique Sid suffixes from account + cluster (alphanumeric only)
 SID_ACCOUNT=$(echo "$JIT_ACCOUNT_ID" | tr -cd '[:alnum:]')
 SID_CLUSTER=$(echo "$ECS_CLUSTER_NAME" | tr -cd '[:alnum:]')
