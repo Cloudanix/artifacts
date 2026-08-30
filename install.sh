@@ -134,6 +134,15 @@ chmod +x "${TARGET_DIR}/setup.sh"
 echo -e "  ${G}✓${R} ${SELECTED}/config.sh"
 echo -e "  ${G}✓${R} ${SELECTED}/setup.sh"
 
+# Download cleanup script if present (optional)
+mkdir -p "${TARGET_DIR}/cleanup"
+if curl -fsSL "${REPO_BASE}/${SELECTED}/cleanup/cleanup.sh" -o "${TARGET_DIR}/cleanup/cleanup.sh" 2>/dev/null; then
+    chmod +x "${TARGET_DIR}/cleanup/cleanup.sh"
+    echo -e "  ${G}✓${R} ${SELECTED}/cleanup/cleanup.sh"
+else
+    rm -f "${TARGET_DIR}/cleanup/cleanup.sh" 2>/dev/null || true
+fi
+
 # Download step scripts by listing from a manifest
 # We fetch the steps manifest (one filename per line)
 STEPS_MANIFEST=$(curl -fsSL "${REPO_BASE}/${SELECTED}/steps/MANIFEST" 2>/dev/null || echo "")
