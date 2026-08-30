@@ -84,6 +84,7 @@ CONFIG_FIELDS=(
     "VPC_ID|nonempty||Existing VPC ID where the bastion will run (e.g. vpc-0abc123)|existing-vpc|false"
     "PRIV_SUB_1|nonempty||Private subnet ID for the bastion — needs NAT or SSM/ECR VPC endpoints (e.g. subnet-0abc123)|existing-vpc|false"
     "PRIV_SUB_2|nonempty||Second private subnet ID for HA (optional, press Enter to skip)|existing-vpc|false"
+    "HUB_VPC_ID|nonempty|__AUTO_BASTION_VPC__|Bastion hub VPC ID (auto-detected — confirm or override)|onboard-cluster|false"
     "EKS_REGION|region|us-east-1|Region of the EKS cluster (can differ from bastion region)|onboard-cluster|false"
     "EKS_VPC_ID|nonempty||VPC ID of the EKS cluster to connect to (e.g. vpc-0def456)|*|false"
     "EKS_VPC_CIDR|cidr||CIDR block of the EKS cluster VPC (e.g. 10.100.0.0/16)|*|false"

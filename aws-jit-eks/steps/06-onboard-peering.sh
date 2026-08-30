@@ -25,7 +25,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
 
-require_env AWS_REGION EKS_ACCOUNT_ID EKS_REGION EKS_VPC_ID EKS_VPC_CIDR
+require_env AWS_REGION EKS_ACCOUNT_ID EKS_REGION EKS_VPC_ID EKS_VPC_CIDR HUB_VPC_ID
 
 export AWS_DEFAULT_REGION="$AWS_REGION"
 REQUESTER_ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output text)
@@ -33,25 +33,29 @@ REQUESTER_ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output te
 SG_NAME="cdx-jit-k8s-hub-bastion-sg"
 
 # =============================================================================
-# DISCOVER EXISTING BASTION VPC + SG
+# RESOLVE BASTION SG + CIDR FROM CONFIRMED HUB VPC
 # =============================================================================
 
-step "Discover Bastion VPC"
+step "Bastion VPC"
 
-BASTION_SG=$(aws ec2 describe-security-groups \
-    --filters "Name=group-name,Values=$SG_NAME" \
-    --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
-
-if [[ -z "$BASTION_SG" || "$BASTION_SG" == "None" ]]; then
-    error "Bastion security group '$SG_NAME' not found in this account/region."
-    error "Run the initial EKS setup (new-vpc or existing-vpc) first."
+# HUB_VPC_ID was confirmed by the user during config (auto-detected default).
+HUB_VPC_CIDR=$(aws ec2 describe-vpcs --vpc-ids "$HUB_VPC_ID" \
+    --query 'Vpcs[0].CidrBlock' --output text 2>/dev/null)
+if [[ -z "$HUB_VPC_CIDR" || "$HUB_VPC_CIDR" == "None" ]]; then
+    error "Hub VPC '$HUB_VPC_ID' not found in this account/region."
     exit 1
 fi
 
-HUB_VPC_ID=$(aws ec2 describe-security-groups --group-ids "$BASTION_SG" \
-    --query 'SecurityGroups[0].VpcId' --output text)
-HUB_VPC_CIDR=$(aws ec2 describe-vpcs --vpc-ids "$HUB_VPC_ID" \
-    --query 'Vpcs[0].CidrBlock' --output text)
+# Find the bastion SG within the hub VPC
+BASTION_SG=$(aws ec2 describe-security-groups \
+    --filters "Name=vpc-id,Values=$HUB_VPC_ID" "Name=group-name,Values=$SG_NAME" \
+    --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
+
+if [[ -z "$BASTION_SG" || "$BASTION_SG" == "None" ]]; then
+    error "Bastion security group '$SG_NAME' not found in VPC $HUB_VPC_ID."
+    error "Run the initial EKS setup (new-vpc or existing-vpc) first."
+    exit 1
+fi
 
 ok "Bastion VPC: $HUB_VPC_ID ($HUB_VPC_CIDR) | SG: $BASTION_SG"
 info "New EKS: $EKS_VPC_ID ($EKS_VPC_CIDR) | account: $EKS_ACCOUNT_ID | region: $EKS_REGION"

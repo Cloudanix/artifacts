@@ -178,6 +178,12 @@ if [[ "$RESUME_MODE" == false ]]; then
     # Auto-detect values for smart defaults
     _CURRENT_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null || echo "")
     _SSO_INSTANCE_ARN=$(aws sso-admin list-instances --query "Instances[0].InstanceArn" --output text 2>/dev/null || echo "")
+    # Discover existing bastion VPC (for onboard-cluster scope)
+    _BASTION_SG=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=cdx-jit-k8s-hub-bastion-sg" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "")
+    _BASTION_VPC=""
+    if [[ -n "$_BASTION_SG" && "$_BASTION_SG" != "None" ]]; then
+        _BASTION_VPC=$(aws ec2 describe-security-groups --group-ids "$_BASTION_SG" --query 'SecurityGroups[0].VpcId' --output text 2>/dev/null || echo "")
+    fi
 
     step "Configuration"
     echo ""
@@ -205,6 +211,8 @@ if [[ "$RESUME_MODE" == false ]]; then
         # Resolve auto-defaults
         if [[ "$field_default" == "__AUTO_SSO__" ]]; then
             field_default="${_SSO_INSTANCE_ARN:-}"
+        elif [[ "$field_default" == "__AUTO_BASTION_VPC__" ]]; then
+            field_default="${_BASTION_VPC:-}"
         elif [[ "$field_default" == "__AUTO_BUCKET__" ]]; then
             # Use JIT account ID if already collected, otherwise current account
             _jit_id=$(get_config_value "$STATE_FILE" "JIT_ACCOUNT_ID" 2>/dev/null || echo "")
@@ -268,6 +276,11 @@ fi
 if [[ "$RESUME_MODE" == true ]]; then
     _CURRENT_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null || echo "")
     _SSO_INSTANCE_ARN=$(aws sso-admin list-instances --query "Instances[0].InstanceArn" --output text 2>/dev/null || echo "")
+    _BASTION_SG=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=cdx-jit-k8s-hub-bastion-sg" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "")
+    _BASTION_VPC=""
+    if [[ -n "$_BASTION_SG" && "$_BASTION_SG" != "None" ]]; then
+        _BASTION_VPC=$(aws ec2 describe-security-groups --group-ids "$_BASTION_SG" --query 'SecurityGroups[0].VpcId' --output text 2>/dev/null || echo "")
+    fi
 
     MISSING_CONFIG=false
     for field_def in "${CONFIG_FIELDS[@]}"; do
@@ -293,6 +306,8 @@ if [[ "$RESUME_MODE" == true ]]; then
 
             if [[ "$field_default" == "__AUTO_SSO__" ]]; then
                 field_default="${_SSO_INSTANCE_ARN:-}"
+            elif [[ "$field_default" == "__AUTO_BASTION_VPC__" ]]; then
+                field_default="${_BASTION_VPC:-}"
             elif [[ "$field_default" == "__AUTO_BUCKET__" ]]; then
                 _jit_id=$(get_config_value "$STATE_FILE" "JIT_ACCOUNT_ID" 2>/dev/null || echo "")
                 field_default="cdx-jit-db-logs-${_jit_id:-${_CURRENT_ACCOUNT_ID:-unknown}}"
