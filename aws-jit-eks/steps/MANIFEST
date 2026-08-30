@@ -4,3 +4,5 @@
 03-setup-vpc-peering.sh
 04-accept-peering.sh
 05-create-permission-sets.sh
+06-onboard-peering.sh
+07-onboard-accept.sh
