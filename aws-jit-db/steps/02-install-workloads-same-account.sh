@@ -162,8 +162,8 @@ step "Extend Existing Policies"
 
 # Extend S3 policy with new bucket ARNs
 S3_POLICY_NAME="${PROJECT_NAME}-S3Access"
-S3_POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='${S3_POLICY_NAME}'].Arn | [0]" --output text 2>/dev/null)
-if [[ -n "$S3_POLICY_ARN" && "$S3_POLICY_ARN" != "None" ]]; then
+S3_POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${S3_POLICY_NAME}"
+if aws iam get-policy --policy-arn "$S3_POLICY_ARN" > /dev/null 2>&1; then
     extend_policy "$S3_POLICY_ARN" \
         "arn:aws:s3:::${BUCKET_NAME}" \
         "arn:aws:s3:::${BUCKET_NAME}/*"
@@ -178,8 +178,8 @@ fi
 
 # Extend CloudWatch Logs policy with new log group ARNs
 LOGS_POLICY_NAME="${PROJECT_NAME}-CloudWatchLogs"
-LOGS_POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='${LOGS_POLICY_NAME}'].Arn | [0]" --output text 2>/dev/null)
-if [[ -n "$LOGS_POLICY_ARN" && "$LOGS_POLICY_ARN" != "None" ]]; then
+LOGS_POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${LOGS_POLICY_NAME}"
+if aws iam get-policy --policy-arn "$LOGS_POLICY_ARN" > /dev/null 2>&1; then
     extend_policy "$LOGS_POLICY_ARN" \
         "arn:aws:logs:${AWS_REGION}:${ACCOUNT_ID}:log-group:/ecs/${PROJECT_NAME}/proxyserver-${SETUP_NUMBER}:*" \
         "arn:aws:logs:${AWS_REGION}:${ACCOUNT_ID}:log-group:/ecs/${PROJECT_NAME}/proxysql-${SETUP_NUMBER}:*" \
