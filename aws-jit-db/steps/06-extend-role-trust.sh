@@ -45,6 +45,26 @@ if [[ -z "$CURRENT_TRUST" ]]; then
     error "Role $ROLE_NAME not found. Run step 05 first."; exit 1
 fi
 
+# Sanitize: remove stale role/user unique IDs (AROA/AIDA prefixes) from AWS
+# principals. These appear when a referenced role was deleted and recreated —
+# AWS rewrites the ARN to the raw ID, which then fails validation on the next
+# update-assume-role-policy call. We strip the bad IDs, and drop any statement
+# left with an empty principal.
+CURRENT_TRUST=$(echo "$CURRENT_TRUST" | jq '
+    .Statement = [
+        .Statement[]
+        | if (.Principal.AWS != null) then
+            .Principal.AWS = (
+                if (.Principal.AWS | type) == "array"
+                then [ .Principal.AWS[] | select(test("^(AROA|AIDA)") | not) ]
+                else (if (.Principal.AWS | test("^(AROA|AIDA)")) then empty else .Principal.AWS end)
+                end
+            )
+          else . end
+        # drop statements whose AWS principal became an empty array
+        | select((.Principal.AWS == null) or ((.Principal.AWS | type) != "array") or ((.Principal.AWS | length) > 0))
+    ]')
+
 # Check if the ECS task role is already trusted
 ALREADY_TRUSTED=$(echo "$CURRENT_TRUST" | jq -r \
     --arg arn "$ECS_TASK_ROLE_ARN" \
