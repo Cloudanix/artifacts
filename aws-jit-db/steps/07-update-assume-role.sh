@@ -20,7 +20,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
 
-require_env AWS_REGION DB_ACCOUNT_ID
+require_env AWS_REGION
+
+ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
+
+# In same-account scope, DB is in the JIT account — default DB_ACCOUNT_ID to current.
+DB_ACCOUNT_ID="${DB_ACCOUNT_ID:-$ACCOUNT_ID}"
 
 # =============================================================================
 # CONFIGURATION
@@ -31,8 +36,6 @@ ECS_ROLE_NAME="${PROJECT_NAME}-ECSRole"
 POLICY_NAME="cdx-ECSRDSAssumeRolePolicy"
 CROSS_ACCOUNT_ROLE_NAME="cdx-jit-db-cross-account-role"
 CROSS_ACCOUNT_ROLE_ARN="arn:aws:iam::${DB_ACCOUNT_ID}:role/${CROSS_ACCOUNT_ROLE_NAME}"
-
-ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 info "JIT Account: $ACCOUNT_ID | DB Account: $DB_ACCOUNT_ID"
 info "ECS Role: $ECS_ROLE_NAME"
 info "Target: $CROSS_ACCOUNT_ROLE_ARN"
