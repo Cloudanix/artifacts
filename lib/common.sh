@@ -669,6 +669,11 @@ validate_nonempty() {
     [[ -n "$value" ]]
 }
 
+# Accepts any value, including empty — for genuinely optional fields.
+validate_optional() {
+    return 0
+}
+
 # Dispatcher: validate VALUE RULE
 #   Calls the appropriate validator based on rule name
 validate() {
@@ -685,6 +690,7 @@ validate() {
         semver_or_latest)       validate_semver_or_latest "$value" ;;
         boolean)                validate_boolean "$value" ;;
         nonempty)               validate_nonempty "$value" ;;
+        optional)               validate_optional "$value" ;;
         *)                      validate_nonempty "$value" ;;  # fallback
     esac
 }

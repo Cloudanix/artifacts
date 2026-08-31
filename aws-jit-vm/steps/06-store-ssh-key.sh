@@ -4,14 +4,19 @@
 # =============================================================================
 # Run in the VM TARGET account. Creates or updates a Secrets Manager secret
 # that stores SSH private keys for target VMs. Keys are stored as JSON with
-# instance-id as the key name.
+# instance-id as the key name, matching what the JIT proxy expects
+# (CDX_VM_SECRETS_MANAGER_NAME = <project>-ssh-keys).
+#
+# The instance ID and key can be supplied via env (SSH_KEY_INSTANCE_ID +
+# SSH_KEY_FILE) OR entered interactively at the prompt. If neither is given
+# the secret is created as an empty placeholder and keys can be added later.
 #
 # Required env vars:
 #   AWS_REGION, PROJECT_NAME
 #
 # Optional env vars:
 #   SSH_KEY_INSTANCE_ID — the EC2 instance ID (key identifier)
-#   SSH_KEY_FILE — path to the SSH private key file
+#   SSH_KEY_FILE        — path to the SSH private key file
 #
 # Outputs:
 #   OUTPUT:SSH_KEY_SECRET_ARN
@@ -20,13 +25,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
+export CDX_PURPOSE=jit_vm
 
 require_env AWS_REGION PROJECT_NAME
 
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
-
+export AWS_DEFAULT_REGION="$AWS_REGION"
 SECRET_NAME="${PROJECT_NAME}-ssh-keys"
 
 info "Secret Name: $SECRET_NAME"
@@ -39,55 +42,92 @@ info "Region: $AWS_REGION"
 step "Secrets Manager"
 
 SECRET_ARN=""
-if aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$AWS_REGION" > /dev/null 2>&1; then
+if aws secretsmanager describe-secret --secret-id "$SECRET_NAME" > /dev/null 2>&1; then
     SECRET_ARN=$(aws secretsmanager describe-secret --secret-id "$SECRET_NAME" \
-        --query 'ARN' --output text --region "$AWS_REGION")
+        --query 'ARN' --output text)
     ok "Secret exists: $SECRET_NAME ($SECRET_ARN)"
 else
-    # Create the secret with an empty JSON object as placeholder
     SECRET_ARN=$(aws secretsmanager create-secret \
         --name "$SECRET_NAME" \
         --description "SSH keys for target VMs (instance-id → private key)" \
         --secret-string '{}' \
-        --tags "Key=Purpose,Value=vm-jit" "Key=created_by,Value=cloudanix" \
-        --region "$AWS_REGION" \
+        --tags $(cdx_tags_kv) \
         --query 'ARN' --output text)
     ok "Secret created: $SECRET_NAME ($SECRET_ARN)"
 fi
 
 # =============================================================================
-# STORE KEY (if provided)
+# COLLECT KEY (interactive if not provided via env)
 # =============================================================================
 
-if [[ -n "${SSH_KEY_INSTANCE_ID:-}" && -n "${SSH_KEY_FILE:-}" ]]; then
-    step "Store SSH Key"
-
+# If not supplied via env, offer to add a key now.
+if [[ -z "${SSH_KEY_INSTANCE_ID:-}" || -z "${SSH_KEY_FILE:-}" ]]; then
+    echo ""
+    if prompt_yes_no "Add an SSH private key for a target VM now?" "y"; then
+        # Instance ID
+        while [[ -z "${SSH_KEY_INSTANCE_ID:-}" ]]; do
+            read -erp "  Target EC2 Instance ID (e.g. i-0abc123...): " SSH_KEY_INSTANCE_ID
+            SSH_KEY_INSTANCE_ID="$(printf '%s' "${SSH_KEY_INSTANCE_ID:-}" | xargs)"
+        done
+        # Key source: file path or paste
+        echo "  Provide the private key by:"
+        echo "    1) Path to a .pem/.key file (default)"
+        echo "    2) Paste the key contents"
+        key_src=""
+        read -erp "  Select [1-2] (default 1): " key_src
+        key_src="${key_src:-1}"
+        if [[ "$key_src" == "2" ]]; then
+            echo "  Paste the PRIVATE KEY (including BEGIN/END lines), then press Ctrl-D:"
+            SSH_KEY_CONTENT="$(cat || true)"
+        else
+            while [[ -z "${SSH_KEY_FILE:-}" ]]; do
+                read -erp "  Path to private key file: " SSH_KEY_FILE
+                SSH_KEY_FILE="$(printf '%s' "${SSH_KEY_FILE:-}" | xargs)"
+                # Expand a leading ~ to $HOME
+                SSH_KEY_FILE="${SSH_KEY_FILE/#\~/$HOME}"
+                if [[ -n "$SSH_KEY_FILE" && ! -f "$SSH_KEY_FILE" ]]; then
+                    warn "File not found: $SSH_KEY_FILE"
+                    SSH_KEY_FILE=""
+                fi
+            done
+            SSH_KEY_CONTENT="$(cat "$SSH_KEY_FILE")"
+        fi
+    fi
+elif [[ -n "${SSH_KEY_FILE:-}" ]]; then
+    # Env-driven path
+    SSH_KEY_FILE="${SSH_KEY_FILE/#\~/$HOME}"
     if [[ ! -f "$SSH_KEY_FILE" ]]; then
         error "Key file not found: $SSH_KEY_FILE"
         exit 1
     fi
+    SSH_KEY_CONTENT="$(cat "$SSH_KEY_FILE")"
+fi
 
-    SSH_KEY_CONTENT=$(cat "$SSH_KEY_FILE")
+# =============================================================================
+# STORE KEY (merge into existing secret JSON, keyed by instance ID)
+# =============================================================================
+
+if [[ -n "${SSH_KEY_INSTANCE_ID:-}" && -n "${SSH_KEY_CONTENT:-}" ]]; then
+    step "Store SSH Key"
     info "Instance ID: $SSH_KEY_INSTANCE_ID"
 
-    # Get current secret value and merge
     CURRENT_JSON=$(aws secretsmanager get-secret-value \
         --secret-id "$SECRET_NAME" \
-        --region "$AWS_REGION" \
         --query 'SecretString' --output text 2>/dev/null || echo "{}")
+    [[ -z "$CURRENT_JSON" || "$CURRENT_JSON" == "None" ]] && CURRENT_JSON="{}"
 
-    UPDATED_JSON=$(echo "$CURRENT_JSON" | jq --arg id "$SSH_KEY_INSTANCE_ID" --arg key "$SSH_KEY_CONTENT" \
+    UPDATED_JSON=$(printf '%s' "$CURRENT_JSON" | jq \
+        --arg id "$SSH_KEY_INSTANCE_ID" --arg key "$SSH_KEY_CONTENT" \
         '. + {($id): $key}')
 
-    aws secretsmanager update-secret \
+    aws secretsmanager put-secret-value \
         --secret-id "$SECRET_NAME" \
-        --secret-string "$UPDATED_JSON" \
-        --region "$AWS_REGION" > /dev/null
+        --secret-string "$UPDATED_JSON" > /dev/null
 
     ok "Key stored for instance: $SSH_KEY_INSTANCE_ID"
 else
-    info "No SSH_KEY_INSTANCE_ID/SSH_KEY_FILE provided — secret created as empty placeholder"
-    info "Add keys later: aws secretsmanager update-secret --secret-id $SECRET_NAME ..."
+    info "No key provided — secret left as-is (placeholder or existing keys)."
+    info "Add keys later: aws secretsmanager put-secret-value --secret-id $SECRET_NAME ..."
 fi
 
 # =============================================================================

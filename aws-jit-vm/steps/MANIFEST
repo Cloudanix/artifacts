@@ -5,3 +5,5 @@
 04-setup-vpc-peering.sh
 05-accept-peering.sh
 06-store-ssh-key.sh
+07-onboard-peered.sh
+08-onboard-peering.sh
