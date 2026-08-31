@@ -374,12 +374,12 @@ else
             echo -e "  programmatic access' → Copy Option 1 (environment variables)${_CLR_RESET}"
             echo -e "${_CLR_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${_CLR_RESET}"
             echo ""
-            echo "  Paste the export commands below (press Enter twice when done):"
+            echo "  Paste the 3 export commands below, then press Enter:"
             echo ""
 
             pasted_text=""
             empty_count=0
-            while IFS= read -r line; do
+            while IFS= read -r -t 2 line; do
                 line="${line%$'\r'}"
                 if [[ -z "$line" ]]; then
                     empty_count=$((empty_count + 1))
@@ -388,12 +388,10 @@ else
                     empty_count=0
                     pasted_text+="$line"$'\n'
                 fi
-                if echo "$pasted_text" | grep -q 'AWS_ACCESS_KEY_ID' \
-                   && echo "$pasted_text" | grep -q 'AWS_SECRET_ACCESS_KEY' \
-                   && echo "$pasted_text" | grep -q 'AWS_SESSION_TOKEN'; then
-                    break
-                fi
             done
+            if [[ -n "${line:-}" ]]; then
+                pasted_text+="${line%$'\r'}"$'\n'
+            fi
 
             # Parse credentials — extract value after the = sign, strip quotes
             access_key=$(echo "$pasted_text" | grep 'AWS_ACCESS_KEY_ID' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
