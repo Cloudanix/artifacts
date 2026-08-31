@@ -377,22 +377,16 @@ else
             echo -e "  programmatic access' → Copy Option 1 (environment variables)${_CLR_RESET}"
             echo -e "${_CLR_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${_CLR_RESET}"
             echo ""
-            echo "  Paste the 3 export commands below, then press Enter:"
+            echo "  Paste the 3 export commands below, then press Enter and Ctrl-D:"
+            echo -e "${_CLR_DIM}  (paste all 3 lines, hit Enter, then press Ctrl-D on an empty line)${_CLR_RESET}"
             echo ""
 
-            pasted_text=""
-            # First read is BLOCKING — waits for the user to paste (no timeout).
-            # Subsequent reads use a short timeout to drain the rest of a
-            # multi-line paste even if the final line has no trailing newline.
-            line=""
-            IFS= read -r line || true
-            pasted_text="${line%$'\r'}"$'\n'
-            while IFS= read -r -t 1 line || [[ -n "$line" ]]; do
-                line="${line%$'\r'}"
-                [[ -z "$line" ]] && break
-                pasted_text+="$line"$'\n'
-                line=""
-            done
+            # Read the entire pasted block until EOF (Ctrl-D). Using `cat` instead
+            # of a line-by-line `read` loop makes this immune to terminal paste
+            # quirks: it does not depend on a trailing newline or on read timeouts,
+            # which previously caused the loop to exit early and spill the paste
+            # onto the shell prompt. `|| true` guards against set -e on empty EOF.
+            pasted_text="$(cat || true)"
 
             # Parse credentials — extract value after the = sign, strip quotes
             access_key=$(echo "$pasted_text" | grep 'AWS_ACCESS_KEY_ID' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
