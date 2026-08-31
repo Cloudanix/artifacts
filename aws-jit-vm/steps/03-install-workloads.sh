@@ -309,32 +309,38 @@ create_efs() {
     echo "$_id"
 }
 
-EFS_ID=$(aws efs describe-file-systems --query "FileSystems[?Tags[?Key=='Name'&&Value=='${PROJECT_NAME}-efs']].FileSystemId | [0]" \
+# Find an EFS tagged for this project that is USABLE in the current VPC.
+# EFS mount targets are VPC-scoped: an EFS whose mount targets live in another
+# VPC cannot get a mount target here (MountTargetConflict). There may be more
+# than one name-matching EFS (e.g. an orphan from a prior run in a deleted VPC),
+# so we scan all of them and pick one that has no mount targets yet OR already
+# has them in $VPC_ID. If none qualifies, we create a fresh EFS.
+EFS_ID=""
+CANDIDATE_EFS_IDS=$(aws efs describe-file-systems \
+    --query "FileSystems[?Tags[?Key=='Name'&&Value=='${PROJECT_NAME}-efs']].FileSystemId" \
     --output text 2>/dev/null)
-if [[ -z "$EFS_ID" || "$EFS_ID" == "None" ]]; then
+for _efs in $CANDIDATE_EFS_IDS; do
+    [[ -z "$_efs" || "$_efs" == "None" ]] && continue
+    _mt_subnet=$(aws efs describe-mount-targets --file-system-id "$_efs" \
+        --query 'MountTargets[0].SubnetId' --output text 2>/dev/null)
+    if [[ -z "$_mt_subnet" || "$_mt_subnet" == "None" ]]; then
+        # No mount targets yet — usable in any VPC.
+        EFS_ID="$_efs"
+        ok "EFS exists: $EFS_ID (no mount targets yet)"
+        break
+    fi
+    _mt_vpc=$(aws ec2 describe-subnets --subnet-ids "$_mt_subnet" \
+        --query 'Subnets[0].VpcId' --output text 2>/dev/null) || _mt_vpc=""
+    if [[ "$_mt_vpc" == "$VPC_ID" ]]; then
+        EFS_ID="$_efs"
+        ok "EFS exists: $EFS_ID (mount targets in current VPC)"
+        break
+    fi
+    info "Skipping EFS $_efs — mount targets in different VPC (${_mt_vpc:-unknown})"
+done
+if [[ -z "$EFS_ID" ]]; then
     EFS_ID=$(create_efs)
     ok "EFS created: $EFS_ID"
-else
-    # An EFS with our name tag exists. EFS mount targets are VPC-scoped, so if
-    # this EFS already has mount targets in a DIFFERENT VPC (e.g. a previous
-    # run in another VPC), we cannot add mount targets in the current VPC —
-    # AWS returns MountTargetConflict. In that case, provision a fresh EFS.
-    EXISTING_MT_SUBNET=$(aws efs describe-mount-targets --file-system-id "$EFS_ID" \
-        --query 'MountTargets[0].SubnetId' --output text 2>/dev/null)
-    if [[ -n "$EXISTING_MT_SUBNET" && "$EXISTING_MT_SUBNET" != "None" ]]; then
-        EXISTING_MT_VPC=$(aws ec2 describe-subnets --subnet-ids "$EXISTING_MT_SUBNET" \
-            --query 'Subnets[0].VpcId' --output text 2>/dev/null) || EXISTING_MT_VPC=""
-        if [[ -n "$EXISTING_MT_VPC" && "$EXISTING_MT_VPC" != "$VPC_ID" ]]; then
-            warn "Existing EFS $EFS_ID has mount targets in a different VPC ($EXISTING_MT_VPC)."
-            warn "Creating a fresh EFS for the current VPC ($VPC_ID)."
-            EFS_ID=$(create_efs)
-            ok "EFS created: $EFS_ID"
-        else
-            ok "EFS exists: $EFS_ID (mount targets in current VPC)"
-        fi
-    else
-        ok "EFS exists: $EFS_ID (no mount targets yet)"
-    fi
 fi
 
 for SUB in "$PRIV_SUB_1" "$PRIV_SUB_2"; do
