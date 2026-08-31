@@ -346,6 +346,11 @@ else
     declare -A CREDS_ACCESS_KEY
     declare -A CREDS_SECRET_KEY
     declare -A CREDS_SESSION_TOKEN
+    # Cache collected creds keyed by AWS account ID so multiple step contexts
+    # that resolve to the same account are only prompted for once.
+    declare -A CREDS_BY_ID_AK
+    declare -A CREDS_BY_ID_SK
+    declare -A CREDS_BY_ID_ST
 
     for acct_context in "${ACCOUNTS_NEEDED[@]}"; do
         account_label="${ACCOUNT_LABELS[$acct_context]:-$acct_context}"
@@ -355,6 +360,16 @@ else
             expected_id=$(get_config_value "$STATE_FILE" "$account_id_field")
         fi
 
+        # If we already collected creds for this same account ID (another
+        # context maps to the same account), reuse them without re-prompting.
+        if [[ -n "$expected_id" && -n "${CREDS_BY_ID_AK[$expected_id]:-}" ]]; then
+            ok "$account_label ($expected_id) — reusing credentials already provided for this account"
+            CREDS_ACCESS_KEY["$acct_context"]="${CREDS_BY_ID_AK[$expected_id]}"
+            CREDS_SECRET_KEY["$acct_context"]="${CREDS_BY_ID_SK[$expected_id]}"
+            CREDS_SESSION_TOKEN["$acct_context"]="${CREDS_BY_ID_ST[$expected_id]}"
+            continue
+        fi
+
         # Check if current creds already match this account
         current_id=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null) || current_id=""
         if [[ "$current_id" == "$expected_id" && -n "$expected_id" ]]; then
@@ -362,6 +377,9 @@ else
             CREDS_ACCESS_KEY["$acct_context"]="${AWS_ACCESS_KEY_ID:-__current__}"
             CREDS_SECRET_KEY["$acct_context"]="${AWS_SECRET_ACCESS_KEY:-__current__}"
             CREDS_SESSION_TOKEN["$acct_context"]="${AWS_SESSION_TOKEN:-}"
+            CREDS_BY_ID_AK["$expected_id"]="${AWS_ACCESS_KEY_ID:-__current__}"
+            CREDS_BY_ID_SK["$expected_id"]="${AWS_SECRET_ACCESS_KEY:-__current__}"
+            CREDS_BY_ID_ST["$expected_id"]="${AWS_SESSION_TOKEN:-}"
             continue
         fi
 
@@ -374,35 +392,22 @@ else
             echo -e "  programmatic access' → Copy Option 1 (environment variables)${_CLR_RESET}"
             echo -e "${_CLR_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${_CLR_RESET}"
             echo ""
-            echo "  Enter the three credential values ONE AT A TIME (paste one, press Enter, repeat)."
-            echo -e "${_CLR_DIM}  Copy each line separately from the AWS portal. You can paste either the"
-            echo -e "  bare value or the whole 'export KEY=\"value\"' line — the prefix and"
-            echo -e "  quotes are stripped automatically. Entering one value per prompt keeps"
-            echo -e "  each paste short enough to avoid terminal line-length truncation.${_CLR_RESET}"
+            echo "  Paste the 3 export commands below, then press Enter and Ctrl-D:"
+            echo -e "${_CLR_DIM}  (paste all 3 lines, hit Enter, then press Ctrl-D on an empty line)${_CLR_RESET}"
             echo ""
 
-            # Helper: read one credential field, tolerating a pasted full export
-            # line (export KEY="value") or a bare value.
-            _read_cred_field() {
-                local _label="$1" _val=""
-                read -erp "  $_label: " _val
-                _val="${_val#export }"
-                if [[ "$_val" == *"="* ]]; then
-                    case "$_val" in
-                        AWS_*=*) _val="${_val#*=}" ;;
-                    esac
-                fi
-                _val="${_val%$'\r'}"
-                _val="$(printf '%s' "$_val" | tr -d '"' | tr -d "'" | xargs)"
-                printf '%s' "$_val"
-            }
+            # Read the entire pasted block until EOF (Ctrl-D). Using `cat` instead
+            # of a line-by-line `read` loop makes this immune to terminal paste
+            # quirks: it does not depend on a trailing newline or on read timeouts.
+            pasted_text="$(cat || true)"
 
-            access_key="$(_read_cred_field 'AWS_ACCESS_KEY_ID')"
-            secret_key="$(_read_cred_field 'AWS_SECRET_ACCESS_KEY')"
-            session_token="$(_read_cred_field 'AWS_SESSION_TOKEN')"
+            # Parse credentials — extract value after the = sign, strip quotes
+            access_key=$(echo "$pasted_text" | grep 'AWS_ACCESS_KEY_ID' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
+            secret_key=$(echo "$pasted_text" | grep 'AWS_SECRET_ACCESS_KEY' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
+            session_token=$(echo "$pasted_text" | grep 'AWS_SESSION_TOKEN' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
 
             if [[ -z "$access_key" || -z "$secret_key" ]]; then
-                error "Access key and secret key are required. Please try again."
+                error "Could not parse credentials. Please paste the export lines from the portal."
                 continue
             fi
 
@@ -440,6 +445,10 @@ else
             CREDS_ACCESS_KEY["$acct_context"]="$access_key"
             CREDS_SECRET_KEY["$acct_context"]="$secret_key"
             CREDS_SESSION_TOKEN["$acct_context"]="$session_token"
+            # Cache by account ID so other contexts on the same account reuse these.
+            CREDS_BY_ID_AK["$expected_id"]="$access_key"
+            CREDS_BY_ID_SK["$expected_id"]="$secret_key"
+            CREDS_BY_ID_ST["$expected_id"]="$session_token"
             break
         done
     done
