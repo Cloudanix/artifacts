@@ -381,21 +381,18 @@ else
             echo ""
 
             pasted_text=""
-            empty_count=0
-            while IFS= read -r -t 2 line; do
+            # First read is BLOCKING — waits for the user to paste (no timeout).
+            # Subsequent reads use a short timeout to drain the rest of a
+            # multi-line paste even if the final line has no trailing newline.
+            line=""
+            IFS= read -r line || true
+            pasted_text="${line%$'\r'}"$'\n'
+            while IFS= read -r -t 1 line || [[ -n "$line" ]]; do
                 line="${line%$'\r'}"
-                if [[ -z "$line" ]]; then
-                    empty_count=$((empty_count + 1))
-                    [[ $empty_count -ge 1 ]] && break
-                else
-                    empty_count=0
-                    pasted_text+="$line"$'\n'
-                fi
+                [[ -z "$line" ]] && break
+                pasted_text+="$line"$'\n'
+                line=""
             done
-            # Capture any partial last line left after timeout (no trailing newline)
-            if [[ -n "${line:-}" ]]; then
-                pasted_text+="${line%$'\r'}"$'\n'
-            fi
 
             # Parse credentials — extract value after the = sign, strip quotes
             access_key=$(echo "$pasted_text" | grep 'AWS_ACCESS_KEY_ID' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
