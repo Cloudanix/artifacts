@@ -540,13 +540,17 @@ for step_id in "${ALL_STEPS[@]}"; do
         fi
     done < <(echo "$steps_json" | jq -r '[.[] | select(.status == "complete") | .outputs // {} | to_entries[]] | .[] | "\(.key)=\(.value)"')
 
-    # Execute step script and capture output
-    step_output=""
+    # Execute step script, streaming output live so long-running waits don't
+    # look like a hang. Tee to a temp file, hide OUTPUT: from the live view,
+    # then parse OUTPUT: from the file afterward for state.
     step_exit_code=0
-    step_output=$(bash "$step_script" 2>&1) || step_exit_code=$?
-
-    # Display step output (non-OUTPUT lines)
-    echo "$step_output" | grep -v "^OUTPUT:" || true
+    step_log=$(mktemp "${TMPDIR:-/tmp}/cdx-step.XXXXXX")
+    set +e
+    bash "$step_script" 2>&1 | tee "$step_log" | grep -v "^OUTPUT:"
+    step_exit_code=${PIPESTATUS[0]}
+    set -e
+    step_output=$(cat "$step_log")
+    rm -f "$step_log"
 
     if [[ $step_exit_code -ne 0 ]]; then
         error "Step '$step_label' failed with exit code $step_exit_code"

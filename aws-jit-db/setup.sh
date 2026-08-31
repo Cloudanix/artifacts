@@ -550,10 +550,16 @@ for step_id in "${ALL_STEPS[@]}"; do
         fi
     done < <(echo "$steps_json" | jq -r '[.[] | select(.status == "complete") | .outputs // {} | to_entries[]] | .[] | "\(.key)=\(.value)"')
 
-    # Execute step script — stream output in real-time using tee
-    step_output_file="/tmp/cdx-step-output-$$.txt"
+    # Execute step script, streaming output live so long-running waits don't
+    # look like a hang. Tee to a temp file, hide OUTPUT: from the live view,
+    # then parse OUTPUT: from the file afterward. PIPESTATUS[0] captures the
+    # step script's real exit code (not tee's).
     step_exit_code=0
-    bash "$step_script" 2>&1 | tee "$step_output_file" || step_exit_code=$?
+    step_output_file=$(mktemp "${TMPDIR:-/tmp}/cdx-step.XXXXXX")
+    set +e
+    bash "$step_script" 2>&1 | tee "$step_output_file" | grep -v "^OUTPUT:"
+    step_exit_code=${PIPESTATUS[0]}
+    set -e
     step_output=$(cat "$step_output_file")
     rm -f "$step_output_file"
 
