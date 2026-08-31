@@ -400,22 +400,32 @@ else
             echo -e "  programmatic access' → Copy Option 1 (environment variables)${_CLR_RESET}"
             echo -e "${_CLR_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${_CLR_RESET}"
             echo ""
-            echo "  Paste the 3 export commands below, then press Enter and Ctrl-D:"
-            echo -e "${_CLR_DIM}  (paste all 3 lines, hit Enter, then press Ctrl-D on an empty line)${_CLR_RESET}"
+            echo "  How would you like to provide credentials?"
+            echo "    1) Open an editor and paste the 3 lines there (recommended — no"
+            echo "       line-length limit, works with the very long session token)"
+            echo "    2) Paste directly here, then press Enter and Ctrl-D (fine on CloudShell)"
             echo ""
+            cred_method=""
+            read -erp "  Select [1-2] (default 1): " cred_method
+            cred_method="${cred_method:-1}"
 
-            # Read the entire pasted block until EOF (Ctrl-D). Using `cat` instead
-            # of a line-by-line `read` loop makes this immune to terminal paste
-            # quirks: it does not depend on a trailing newline or on read timeouts.
-            pasted_text="$(cat || true)"
-
-            # Parse credentials — extract value after the = sign, strip quotes
-            access_key=$(echo "$pasted_text" | grep 'AWS_ACCESS_KEY_ID' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
-            secret_key=$(echo "$pasted_text" | grep 'AWS_SECRET_ACCESS_KEY' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
-            session_token=$(echo "$pasted_text" | grep 'AWS_SESSION_TOKEN' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
+            access_key=""; secret_key=""; session_token=""
+            if [[ "$cred_method" == "2" ]]; then
+                echo ""
+                echo "  Paste the 3 export commands below, then press Enter and Ctrl-D:"
+                echo ""
+                # Read the whole pasted block until EOF (Ctrl-D).
+                pasted_text="$(cat || true)"
+                access_key=$(echo "$pasted_text" | grep 'AWS_ACCESS_KEY_ID' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
+                secret_key=$(echo "$pasted_text" | grep 'AWS_SECRET_ACCESS_KEY' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
+                session_token=$(echo "$pasted_text" | grep 'AWS_SESSION_TOKEN' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
+            else
+                # Editor-based capture — immune to terminal input line limits.
+                capture_aws_creds_via_editor access_key secret_key session_token || true
+            fi
 
             if [[ -z "$access_key" || -z "$secret_key" ]]; then
-                error "Could not parse credentials. Please paste the export lines from the portal."
+                error "Could not read credentials (need at least access key + secret key). Please try again."
                 continue
             fi
 

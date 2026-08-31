@@ -213,6 +213,78 @@ prompt_selection() {
 }
 
 # =============================================================================
+# CREDENTIAL CAPTURE
+# =============================================================================
+# Capturing AWS temporary credentials interactively is surprisingly hard: the
+# session token is ~1KB and a single pasted line can exceed the terminal's
+# canonical-mode input limit (~1024 bytes on macOS), silently truncating it.
+# To be robust, we open a temp file in the user's editor so they can paste the
+# full block with no length limit, then parse the saved file.
+#
+# capture_aws_creds_via_editor OUT_AK OUT_SK OUT_ST
+#   Reads three variable NAMES and assigns the parsed values into them.
+#   Returns 0 on success (access key + secret present), 1 otherwise.
+# =============================================================================
+capture_aws_creds_via_editor() {
+    local _ak_var="$1" _sk_var="$2" _st_var="$3"
+    local _tmp
+    _tmp="$(mktemp "${TMPDIR:-/tmp}/cdx-creds.XXXXXX")" || return 1
+    # Ensure the temp file is removed even if the editor or parsing fails.
+    chmod 600 "$_tmp" 2>/dev/null || true
+
+    cat > "$_tmp" << 'TEMPLATE'
+# Paste the three export lines from the AWS Access Portal below this comment,
+# then SAVE and CLOSE this file to continue.
+#   AWS Access Portal -> your account -> "Command line or programmatic access"
+#   -> copy "Option 1: Set AWS environment variables" (all three lines).
+#
+# Lines starting with '#' are ignored. Example of what to paste:
+#   export AWS_ACCESS_KEY_ID="ASIA..."
+#   export AWS_SECRET_ACCESS_KEY="..."
+#   export AWS_SESSION_TOKEN="..."
+
+TEMPLATE
+
+    local _editor="${EDITOR:-${VISUAL:-}}"
+    if [[ -z "$_editor" ]]; then
+        # Pick a sensible default that exists on the system.
+        if command -v nano >/dev/null 2>&1; then _editor="nano"
+        elif command -v vim  >/dev/null 2>&1; then _editor="vim"
+        elif command -v vi   >/dev/null 2>&1; then _editor="vi"
+        else _editor=""; fi
+    fi
+
+    if [[ -n "$_editor" ]]; then
+        info "Opening an editor ($_editor). Paste the 3 lines, then save & close."
+        # Give the user a moment to read the message.
+        sleep 1
+        "$_editor" "$_tmp" </dev/tty >/dev/tty 2>&1 || true
+    else
+        warn "No editor found. Edit this file, paste the 3 lines, save, then press Enter:"
+        echo "    $_tmp"
+        read -r _ </dev/tty || true
+    fi
+
+    local _content
+    _content="$(cat "$_tmp" 2>/dev/null)"
+    rm -f "$_tmp" 2>/dev/null || true
+
+    # Strip comment lines, then extract each value.
+    local _clean
+    _clean="$(printf '%s\n' "$_content" | grep -v '^[[:space:]]*#')"
+    local _ak _sk _st
+    _ak=$(printf '%s\n' "$_clean" | grep 'AWS_ACCESS_KEY_ID'     | tail -n1 | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
+    _sk=$(printf '%s\n' "$_clean" | grep 'AWS_SECRET_ACCESS_KEY' | tail -n1 | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
+    _st=$(printf '%s\n' "$_clean" | grep 'AWS_SESSION_TOKEN'     | tail -n1 | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
+
+    printf -v "$_ak_var" '%s' "$_ak"
+    printf -v "$_sk_var" '%s' "$_sk"
+    printf -v "$_st_var" '%s' "$_st"
+
+    [[ -n "$_ak" && -n "$_sk" ]]
+}
+
+# =============================================================================
 # STATE MANAGEMENT FUNCTIONS
 # =============================================================================
 # State is stored as JSON in .state.json using jq for manipulation.
