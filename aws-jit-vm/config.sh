@@ -85,6 +85,9 @@ CONFIG_FIELDS=(
     "CDX_API_BASE|nonempty|https://console.cloudanix.com/|CDX API Base URL|*|false"
     "VM_VPC_ID|nonempty||VM VPC ID|new-vpc|false"
     "VM_VPC_CIDR|cidr||VM VPC CIDR|new-vpc|false"
+    "VPC_ID|nonempty||Existing VPC ID (where ECS workloads run)|existing-vpc|false"
+    "PRIVATE_SUBNET_1_ID|nonempty||Private Subnet 1 ID|existing-vpc|false"
+    "PRIVATE_SUBNET_2_ID|nonempty||Private Subnet 2 ID|existing-vpc|false"
     "PERMISSION_SET_NAME|alphanumeric_dash|cdx-EcsVmSsmAccess|SSO Permission Set Name|*|false"
 )
 

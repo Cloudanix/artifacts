@@ -29,6 +29,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
+export CDX_PURPOSE=jit_db
 
 require_env AWS_REGION PROJECT_NAME VPC_CIDR BUCKET_NAME SECRET_NAME \
     CDX_AUTH_TOKEN CDX_SIGNATURE_SECRET_KEY CDX_SENTRY_DSN CDX_DC CDX_API_BASE \
@@ -84,7 +85,7 @@ VPC_ID=$(aws ec2 describe-vpcs \
 
 if [[ -z "$VPC_ID" || "$VPC_ID" == "None" ]]; then
     VPC_ID=$(aws ec2 create-vpc --cidr-block "$VPC_CIDR" \
-        --tag-specifications "ResourceType=vpc,Tags=[{Key=Name,Value=${PROJECT_NAME}-vpc},{Key=Purpose,Value=database-iam-jit},{Key=created_by,Value=cloudanix}]" \
+        --tag-specifications "ResourceType=vpc,Tags=[$(cdx_tags_ec2 "{Key=Name,Value=${PROJECT_NAME}-vpc},")]" \
         --query 'Vpc.VpcId' --output text)
     aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-hostnames '{"Value":true}'
     aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-support '{"Value":true}'
@@ -105,7 +106,7 @@ find_or_create_subnet() {
         --query 'Subnets[0].SubnetId' --output text 2>/dev/null)
     if [[ -z "$sub_id" || "$sub_id" == "None" ]]; then
         sub_id=$(aws ec2 create-subnet --vpc-id "$VPC_ID" --cidr-block "$cidr" --availability-zone "$az" \
-            --tag-specifications "ResourceType=subnet,Tags=[{Key=Name,Value=${name}},{Key=Purpose,Value=database-iam-jit},{Key=created_by,Value=cloudanix}]" \
+            --tag-specifications "ResourceType=subnet,Tags=[$(cdx_tags_ec2 "{Key=Name,Value=${name}},")]" \
             --query 'Subnet.SubnetId' --output text)
     fi
     echo "$sub_id"

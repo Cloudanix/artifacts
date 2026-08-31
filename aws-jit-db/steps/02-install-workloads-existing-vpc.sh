@@ -32,6 +32,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
+export CDX_PURPOSE=jit_db
 
 require_env AWS_REGION PROJECT_NAME BUCKET_NAME SECRET_NAME \
     CDX_AUTH_TOKEN CDX_SIGNATURE_SECRET_KEY CDX_SENTRY_DSN CDX_DC CDX_API_BASE \
@@ -84,7 +85,7 @@ ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output
 if [[ -z "$ROLE_ARN" ]]; then
     aws iam create-role --role-name "$ROLE_NAME" \
         --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
-        --tags "Key=created_by,Value=cloudanix" > /dev/null
+        --tags $(cdx_tags_kv) > /dev/null
     ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text)
     ok "IAM Role created: $ROLE_NAME"
 else
@@ -103,6 +104,7 @@ SECRETS_POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${SECRETS_POLICY_NAME}"
 if ! aws iam get-policy --policy-arn "$SECRETS_POLICY_ARN" > /dev/null 2>&1; then
     SECRETS_POLICY_ARN=$(aws iam create-policy --policy-name "$SECRETS_POLICY_NAME" \
         --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"secretsmanager:GetSecretValue\"],\"Resource\":\"arn:aws:secretsmanager:${AWS_REGION}:${ACCOUNT_ID}:secret:*\"}]}" \
+        --tags $(cdx_tags_kv) \
         --query 'Policy.Arn' --output text)
 fi
 aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$SECRETS_POLICY_ARN"
@@ -113,6 +115,7 @@ EFS_POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${EFS_POLICY_NAME}"
 if ! aws iam get-policy --policy-arn "$EFS_POLICY_ARN" > /dev/null 2>&1; then
     EFS_POLICY_ARN=$(aws iam create-policy --policy-name "$EFS_POLICY_NAME" \
         --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"elasticfilesystem:ClientMount\",\"elasticfilesystem:ClientWrite\",\"elasticfilesystem:DescribeMountTargets\"],\"Resource\":\"arn:aws:elasticfilesystem:${AWS_REGION}:${ACCOUNT_ID}:file-system/*\"}]}" \
+        --tags $(cdx_tags_kv) \
         --query 'Policy.Arn' --output text)
 fi
 aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$EFS_POLICY_ARN"
@@ -123,6 +126,7 @@ S3_POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${S3_POLICY_NAME}"
 if ! aws iam get-policy --policy-arn "$S3_POLICY_ARN" > /dev/null 2>&1; then
     S3_POLICY_ARN=$(aws iam create-policy --policy-name "$S3_POLICY_NAME" \
         --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:*\",\"s3-object-lambda:*\"],\"Resource\":[\"arn:aws:s3:::${BUCKET_NAME}\",\"arn:aws:s3:::${BUCKET_NAME}/*\"]}]}" \
+        --tags $(cdx_tags_kv) \
         --query 'Policy.Arn' --output text)
 fi
 aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$S3_POLICY_ARN"
@@ -134,6 +138,7 @@ if ! aws iam get-policy --policy-arn "$LOGS_POLICY_ARN" > /dev/null 2>&1; then
     LOG_ARNS="\"arn:aws:logs:${AWS_REGION}:${ACCOUNT_ID}:log-group:/ecs/${PROJECT_NAME}/*\""
     LOGS_POLICY_ARN=$(aws iam create-policy --policy-name "$LOGS_POLICY_NAME" \
         --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"logs:*\",\"cloudwatch:GenerateQuery\"],\"Resource\":[${LOG_ARNS}]}]}" \
+        --tags $(cdx_tags_kv) \
         --query 'Policy.Arn' --output text)
 fi
 aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$LOGS_POLICY_ARN"
