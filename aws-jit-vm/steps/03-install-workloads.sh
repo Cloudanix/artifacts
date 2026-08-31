@@ -268,15 +268,20 @@ ok "Log group: $LOG_GROUP"
 
 step "Secrets Manager (app config)"
 APP_SECRET_NAME="${PROJECT_NAME}-secret"
+# Always build the secret JSON from the current config so its keys match what
+# the task definitions reference (CDX_DATA_CENTER, CDX_DC, ...). Then create the
+# secret if missing OR overwrite an existing one — a secret left over from an
+# earlier run may lack keys the containers require, which fails task startup
+# with "secret ... did not contain json key CDX_DATA_CENTER".
+SECRET_JSON=$(jq -n \
+    --arg token "$CDX_API_AUTH_TOKEN" \
+    --arg sig "$CDX_SIGNATURE_SECRET_KEY" \
+    --arg sentry "$CDX_SENTRY_DSN" \
+    --arg dc "$CDX_DATA_CENTER" \
+    --arg api_base "$CDX_API_BASE" \
+    '{CDX_API_AUTH_TOKEN:$token, CDX_SIGNATURE_SECRET_KEY:$sig, CDX_SENTRY_DSN:$sentry, CDX_DATA_CENTER:$dc, CDX_DC:$dc, CDX_API_BASE:$api_base}')
 APP_SECRET_ARN=$(aws secretsmanager describe-secret --secret-id "$APP_SECRET_NAME" --query 'ARN' --output text 2>/dev/null) || APP_SECRET_ARN=""
 if [[ -z "$APP_SECRET_ARN" ]]; then
-    SECRET_JSON=$(jq -n \
-        --arg token "$CDX_API_AUTH_TOKEN" \
-        --arg sig "$CDX_SIGNATURE_SECRET_KEY" \
-        --arg sentry "$CDX_SENTRY_DSN" \
-        --arg dc "$CDX_DATA_CENTER" \
-        --arg api_base "$CDX_API_BASE" \
-        '{CDX_API_AUTH_TOKEN:$token, CDX_SIGNATURE_SECRET_KEY:$sig, CDX_SENTRY_DSN:$sentry, CDX_DATA_CENTER:$dc, CDX_DC:$dc, CDX_API_BASE:$api_base}')
     APP_SECRET_ARN=$(aws secretsmanager create-secret --name "$APP_SECRET_NAME" \
         --description "App secrets for ${PROJECT_NAME} containers" \
         --secret-string "$SECRET_JSON" \
@@ -284,7 +289,9 @@ if [[ -z "$APP_SECRET_ARN" ]]; then
         --query 'ARN' --output text)
     ok "Secret created: $APP_SECRET_NAME"
 else
-    ok "Secret exists: $APP_SECRET_NAME"
+    aws secretsmanager put-secret-value --secret-id "$APP_SECRET_NAME" \
+        --secret-string "$SECRET_JSON" > /dev/null
+    ok "Secret updated: $APP_SECRET_NAME (refreshed keys)"
 fi
 
 # =============================================================================
