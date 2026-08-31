@@ -383,12 +383,22 @@ else
             pasted_text=""
             empty_count=0
             while IFS= read -r line; do
+                # Strip a stray carriage return (Windows/paste artifacts)
+                line="${line%$'\r'}"
                 if [[ -z "$line" ]]; then
                     empty_count=$((empty_count + 1))
                     [[ $empty_count -ge 1 ]] && break
                 else
                     empty_count=0
                     pasted_text+="$line"$'\n'
+                fi
+                # Auto-terminate once all three credential lines are present —
+                # so we don't depend on the trailing blank line (some terminals
+                # with bracketed paste don't deliver it reliably).
+                if echo "$pasted_text" | grep -q 'AWS_ACCESS_KEY_ID' \
+                   && echo "$pasted_text" | grep -q 'AWS_SECRET_ACCESS_KEY' \
+                   && echo "$pasted_text" | grep -q 'AWS_SESSION_TOKEN'; then
+                    break
                 fi
             done
 

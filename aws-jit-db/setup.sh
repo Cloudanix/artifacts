@@ -386,12 +386,18 @@ else
             pasted_text=""
             empty_count=0
             while IFS= read -r line; do
+                line="${line%$'\r'}"
                 if [[ -z "$line" ]]; then
                     empty_count=$((empty_count + 1))
                     [[ $empty_count -ge 1 ]] && break
                 else
                     empty_count=0
                     pasted_text+="$line"$'\n'
+                fi
+                if echo "$pasted_text" | grep -q 'AWS_ACCESS_KEY_ID' \
+                   && echo "$pasted_text" | grep -q 'AWS_SECRET_ACCESS_KEY' \
+                   && echo "$pasted_text" | grep -q 'AWS_SESSION_TOKEN'; then
+                    break
                 fi
             done
 
