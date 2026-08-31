@@ -393,12 +393,12 @@ else
             echo -e "${_CLR_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${_CLR_RESET}"
             echo ""
             echo "  How would you like to provide credentials?"
-            echo "    1) Open an editor and paste the 3 lines there (recommended — no"
-            echo "       line-length limit, works with the very long session token)"
-            echo "    2) Paste directly here, then press Enter and Ctrl-D (fine on CloudShell)"
+            echo "    1) Enter each value one at a time (recommended — paste each, press Enter)"
+            echo "    2) Paste all 3 lines at once, then Enter + Ctrl-D (fine on CloudShell)"
+            echo "    3) Open an editor and paste the 3 lines there"
             echo ""
             cred_method=""
-            read -erp "  Select [1-2] (default 1): " cred_method
+            read -erp "  Select [1-3] (default 1): " cred_method
             cred_method="${cred_method:-1}"
 
             access_key=""; secret_key=""; session_token=""
@@ -410,8 +410,12 @@ else
                 access_key=$(echo "$pasted_text" | grep 'AWS_ACCESS_KEY_ID' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
                 secret_key=$(echo "$pasted_text" | grep 'AWS_SECRET_ACCESS_KEY' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
                 session_token=$(echo "$pasted_text" | grep 'AWS_SESSION_TOKEN' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
-            else
+            elif [[ "$cred_method" == "3" ]]; then
                 capture_aws_creds_via_editor access_key secret_key session_token || true
+            else
+                echo ""
+                echo -e "${_CLR_DIM}  Paste each value (or the full 'export KEY=...' line) and press Enter.${_CLR_RESET}"
+                capture_aws_creds_per_field access_key secret_key session_token || true
             fi
 
             if [[ -z "$access_key" || -z "$secret_key" ]]; then

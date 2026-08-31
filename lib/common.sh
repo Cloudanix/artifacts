@@ -225,6 +225,38 @@ prompt_selection() {
 #   Reads three variable NAMES and assigns the parsed values into them.
 #   Returns 0 on success (access key + secret present), 1 otherwise.
 # =============================================================================
+# _cdx_strip_cred_value RAW
+#   Normalizes a single pasted credential entry: removes a leading "export ",
+#   strips an "AWS_...=" prefix if the whole export line was pasted, removes
+#   surrounding quotes and CR/whitespace. Prints the cleaned value.
+_cdx_strip_cred_value() {
+    local _val="$1"
+    _val="${_val#export }"
+    if [[ "$_val" == AWS_*=* ]]; then
+        _val="${_val#*=}"
+    fi
+    _val="${_val%$'\r'}"
+    printf '%s' "$_val" | tr -d '"' | tr -d "'" | xargs
+}
+
+# capture_aws_creds_per_field OUT_AK OUT_SK OUT_ST
+#   Prompts for each credential value on its own line and assigns the parsed
+#   values into the named variables. Entering one value per prompt keeps each
+#   input short enough to avoid the terminal's canonical-mode line-length limit
+#   that truncates a pasted multi-line export block. Accepts either a bare value
+#   or a full 'export KEY="value"' line. Returns 0 if AK+SK are present.
+capture_aws_creds_per_field() {
+    local _ak_var="$1" _sk_var="$2" _st_var="$3"
+    local _ak_in _sk_in _st_in
+    read -erp "  AWS_ACCESS_KEY_ID: " _ak_in
+    read -erp "  AWS_SECRET_ACCESS_KEY: " _sk_in
+    read -erp "  AWS_SESSION_TOKEN: " _st_in
+    printf -v "$_ak_var" '%s' "$(_cdx_strip_cred_value "$_ak_in")"
+    printf -v "$_sk_var" '%s' "$(_cdx_strip_cred_value "$_sk_in")"
+    printf -v "$_st_var" '%s' "$(_cdx_strip_cred_value "$_st_in")"
+    [[ -n "${!_ak_var}" && -n "${!_sk_var}" ]]
+}
+
 capture_aws_creds_via_editor() {
     local _ak_var="$1" _sk_var="$2" _st_var="$3"
     local _tmp
