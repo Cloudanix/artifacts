@@ -37,6 +37,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
+export CDX_PURPOSE=jit_db
 
 require_env AWS_REGION PROJECT_NAME BUCKET_NAME SECRET_NAME \
     CDX_AUTH_TOKEN CDX_SIGNATURE_SECRET_KEY CDX_SENTRY_DSN CDX_DC CDX_API_BASE \
@@ -240,7 +241,7 @@ if [[ -z "$SECRET_ARN" || "$SECRET_ARN" == "None" ]]; then
     SECRET_ARN=$(aws secretsmanager create-secret --name "$SECRET_NAME" \
         --description "Secrets for CDX JIT DB (setup #${SETUP_NUMBER})" \
         --secret-string "$SECRET_JSON" \
-        --tags "Key=Purpose,Value=database-iam-jit" "Key=created_by,Value=cloudanix" "Key=setup_number,Value=${SETUP_NUMBER}" \
+        --tags $(cdx_tags_kv) "Key=setup_number,Value=${SETUP_NUMBER}" \
         --query 'ARN' --output text)
     ok "Secret created: $SECRET_NAME"
 else
@@ -277,7 +278,7 @@ ECS_SG=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID"
 if [[ -z "$ECS_SG" || "$ECS_SG" == "None" ]]; then
     ECS_SG=$(aws ec2 create-security-group --group-name "$SG_NAME" \
         --description "Security group for ECS cluster (setup #${SETUP_NUMBER})" --vpc-id "$VPC_ID" \
-        --tag-specifications "ResourceType=security-group,Tags=[{Key=Name,Value=${SG_NAME}},{Key=Purpose,Value=database-iam-jit},{Key=created_by,Value=cloudanix},{Key=setup_number,Value=${SETUP_NUMBER}}]" \
+        --tag-specifications "ResourceType=security-group,Tags=[$(cdx_tags_ec2 "{Key=Name,Value=${SG_NAME}},"),{Key=setup_number,Value=${SETUP_NUMBER}}]" \
         --query 'GroupId' --output text)
     # Internal communication rules
     aws ec2 authorize-security-group-ingress --group-id "$ECS_SG" --protocol tcp --port 6032 --source-group "$ECS_SG" > /dev/null
@@ -308,7 +309,7 @@ EFS_ID=$(aws efs describe-file-systems \
 if [[ -z "$EFS_ID" || "$EFS_ID" == "None" ]]; then
     EFS_ID=$(aws efs create-file-system --performance-mode generalPurpose \
         --throughput-mode bursting --encrypted \
-        --tags "Key=Name,Value=${EFS_NAME}" "Key=Purpose,Value=database-iam-jit" "Key=created_by,Value=cloudanix" "Key=setup_number,Value=${SETUP_NUMBER}" \
+        --tags "Key=Name,Value=${EFS_NAME}" $(cdx_tags_kv) "Key=setup_number,Value=${SETUP_NUMBER}" \
         --query 'FileSystemId' --output text)
     info "Waiting for EFS..."
     while true; do
@@ -340,6 +341,7 @@ if [[ -z "$ACCESS_POINT_ID" || "$ACCESS_POINT_ID" == "None" ]]; then
     ACCESS_POINT_ID=$(aws efs create-access-point --file-system-id "$EFS_ID" \
         --posix-user "Uid=1000,Gid=1000" \
         --root-directory "Path=/proxysql-data,CreationInfo={OwnerUid=1000,OwnerGid=1000,Permissions=777}" \
+        --tags $(cdx_tags_kv) "Key=setup_number,Value=${SETUP_NUMBER}" \
         --query 'AccessPointId' --output text)
     ok "EFS Access Point created: $ACCESS_POINT_ID"
 else
@@ -357,7 +359,7 @@ if [[ -z "$CLUSTER_ARN" || "$CLUSTER_ARN" == "None" ]]; then
     CLUSTER_ARN=$(aws ecs create-cluster --cluster-name "$ECS_CLUSTER_NAME" \
         --capacity-providers FARGATE FARGATE_SPOT \
         --default-capacity-provider-strategy "capacityProvider=FARGATE,weight=1" \
-        --tags "key=Purpose,value=database-iam-jit" "key=created_by,value=cloudanix" "key=setup_number,value=${SETUP_NUMBER}" \
+        --tags $(cdx_tags_ecs) "key=setup_number,value=${SETUP_NUMBER}" \
         --query 'cluster.clusterArn' --output text)
     ok "Cluster created: $ECS_CLUSTER_NAME"
 else
@@ -629,7 +631,7 @@ create_service() {
             --network-configuration "$NETWORK_CONFIG" \
             --enable-execute-command \
             --service-connect-configuration "$sc_config" \
-            --tags "key=Purpose,value=database-iam-jit" "key=created_by,value=cloudanix" "key=setup_number,value=${SETUP_NUMBER}" > /dev/null
+            --tags $(cdx_tags_ecs) "key=setup_number,value=${SETUP_NUMBER}" > /dev/null
         ok "Service created: $svc_name"
     fi
 }

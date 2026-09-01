@@ -128,7 +128,7 @@ IGW_ID=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Va
     --query 'InternetGateways[0].InternetGatewayId' --output text 2>/dev/null)
 if [[ -z "$IGW_ID" || "$IGW_ID" == "None" ]]; then
     IGW_ID=$(aws ec2 create-internet-gateway \
-        --tag-specifications "ResourceType=internet-gateway,Tags=[{Key=Name,Value=${PROJECT_NAME}-igw},{Key=created_by,Value=cloudanix}]" \
+        --tag-specifications "ResourceType=internet-gateway,Tags=[$(cdx_tags_ec2 "{Key=Name,Value=${PROJECT_NAME}-igw},")]" \
         --query 'InternetGateway.InternetGatewayId' --output text)
     aws ec2 attach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID"
 fi
@@ -138,7 +138,7 @@ NAT_ID=$(aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$VPC_ID" "Na
 if [[ -z "$NAT_ID" || "$NAT_ID" == "None" ]]; then
     EIP=$(aws ec2 allocate-address --domain vpc --query 'AllocationId' --output text)
     NAT_ID=$(aws ec2 create-nat-gateway --subnet-id "$PUB_SUB_1" --allocation-id "$EIP" \
-        --tag-specifications "ResourceType=natgateway,Tags=[{Key=Name,Value=${PROJECT_NAME}-nat},{Key=created_by,Value=cloudanix}]" \
+        --tag-specifications "ResourceType=natgateway,Tags=[$(cdx_tags_ec2 "{Key=Name,Value=${PROJECT_NAME}-nat},")]" \
         --query 'NatGateway.NatGatewayId' --output text)
     info "Waiting for NAT Gateway..."
     aws ec2 wait nat-gateway-available --nat-gateway-ids "$NAT_ID"
@@ -158,7 +158,7 @@ PUB_RT=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$VPC_ID" "N
     --query 'RouteTables[0].RouteTableId' --output text 2>/dev/null)
 if [[ -z "$PUB_RT" || "$PUB_RT" == "None" ]]; then
     PUB_RT=$(aws ec2 create-route-table --vpc-id "$VPC_ID" \
-        --tag-specifications "ResourceType=route-table,Tags=[{Key=Name,Value=${PROJECT_NAME}-pub-rt},{Key=created_by,Value=cloudanix}]" \
+        --tag-specifications "ResourceType=route-table,Tags=[$(cdx_tags_ec2 "{Key=Name,Value=${PROJECT_NAME}-pub-rt},")]" \
         --query 'RouteTable.RouteTableId' --output text)
     aws ec2 create-route --route-table-id "$PUB_RT" --destination-cidr-block "0.0.0.0/0" --gateway-id "$IGW_ID" > /dev/null
     aws ec2 associate-route-table --route-table-id "$PUB_RT" --subnet-id "$PUB_SUB_1" > /dev/null
@@ -170,7 +170,7 @@ PRIV_RT=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$VPC_ID" "
     --query 'RouteTables[0].RouteTableId' --output text 2>/dev/null)
 if [[ -z "$PRIV_RT" || "$PRIV_RT" == "None" ]]; then
     PRIV_RT=$(aws ec2 create-route-table --vpc-id "$VPC_ID" \
-        --tag-specifications "ResourceType=route-table,Tags=[{Key=Name,Value=${PROJECT_NAME}-priv-rt},{Key=created_by,Value=cloudanix}]" \
+        --tag-specifications "ResourceType=route-table,Tags=[$(cdx_tags_ec2 "{Key=Name,Value=${PROJECT_NAME}-priv-rt},")]" \
         --query 'RouteTable.RouteTableId' --output text)
     aws ec2 create-route --route-table-id "$PRIV_RT" --destination-cidr-block "0.0.0.0/0" --nat-gateway-id "$NAT_ID" > /dev/null
     aws ec2 associate-route-table --route-table-id "$PRIV_RT" --subnet-id "$PRIV_SUB_1" > /dev/null
@@ -188,7 +188,7 @@ ECS_SG=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID"
 if [[ -z "$ECS_SG" || "$ECS_SG" == "None" ]]; then
     ECS_SG=$(aws ec2 create-security-group --group-name "${PROJECT_NAME}-ecs-sg" \
         --description "Security group for ECS cluster" --vpc-id "$VPC_ID" \
-        --tag-specifications "ResourceType=security-group,Tags=[{Key=Name,Value=${PROJECT_NAME}-ecs-sg},{Key=Purpose,Value=database-iam-jit},{Key=created_by,Value=cloudanix}]" \
+        --tag-specifications "ResourceType=security-group,Tags=[$(cdx_tags_ec2 "{Key=Name,Value=${PROJECT_NAME}-ecs-sg},")]" \
         --query 'GroupId' --output text)
     # Internal communication rules
     aws ec2 authorize-security-group-ingress --group-id "$ECS_SG" --protocol tcp --port 6032 --source-group "$ECS_SG" > /dev/null
@@ -216,7 +216,7 @@ ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output
 if [[ -z "$ROLE_ARN" ]]; then
     aws iam create-role --role-name "$ROLE_NAME" \
         --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
-        --tags "Key=created_by,Value=cloudanix" > /dev/null
+        --tags $(cdx_tags_kv) > /dev/null
     ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text)
     ok "IAM Role created: $ROLE_NAME"
 else
@@ -329,7 +329,7 @@ if [[ -z "$SECRET_ARN" || "$SECRET_ARN" == "None" ]]; then
     SECRET_ARN=$(aws secretsmanager create-secret --name "$SECRET_NAME" \
         --description "Secrets for CDX JIT DB" \
         --secret-string "$SECRET_JSON" \
-        --tags "Key=Purpose,Value=database-iam-jit" "Key=created_by,Value=cloudanix" \
+        --tags $(cdx_tags_kv) \
         --query 'ARN' --output text)
     ok "Secret created: $SECRET_NAME"
 else
@@ -366,7 +366,7 @@ EFS_ID=$(aws efs describe-file-systems \
 if [[ -z "$EFS_ID" || "$EFS_ID" == "None" ]]; then
     EFS_ID=$(aws efs create-file-system --performance-mode generalPurpose \
         --throughput-mode bursting --encrypted \
-        --tags "Key=Name,Value=${PROJECT_NAME}-efs" "Key=Purpose,Value=database-iam-jit" "Key=created_by,Value=cloudanix" \
+        --tags "Key=Name,Value=${PROJECT_NAME}-efs" $(cdx_tags_kv) \
         --query 'FileSystemId' --output text)
     info "Waiting for EFS..."
     while true; do
@@ -398,6 +398,7 @@ if [[ -z "$ACCESS_POINT_ID" || "$ACCESS_POINT_ID" == "None" ]]; then
     ACCESS_POINT_ID=$(aws efs create-access-point --file-system-id "$EFS_ID" \
         --posix-user "Uid=1000,Gid=1000" \
         --root-directory "Path=/proxysql-data,CreationInfo={OwnerUid=1000,OwnerGid=1000,Permissions=777}" \
+        --tags $(cdx_tags_kv) \
         --query 'AccessPointId' --output text)
     ok "EFS Access Point created: $ACCESS_POINT_ID"
 else
@@ -415,7 +416,7 @@ if [[ -z "$CLUSTER_ARN" || "$CLUSTER_ARN" == "None" ]]; then
     CLUSTER_ARN=$(aws ecs create-cluster --cluster-name "$ECS_CLUSTER_NAME" \
         --capacity-providers FARGATE FARGATE_SPOT \
         --default-capacity-provider-strategy "capacityProvider=FARGATE,weight=1" \
-        --tags "key=Purpose,value=database-iam-jit" "key=created_by,value=cloudanix" \
+        --tags $(cdx_tags_ecs) \
         --query 'cluster.clusterArn' --output text)
     ok "Cluster created: $ECS_CLUSTER_NAME"
 else
@@ -688,7 +689,7 @@ create_service() {
             --network-configuration "$NETWORK_CONFIG" \
             --enable-execute-command \
             --service-connect-configuration "$sc_config" \
-            --tags "key=Purpose,value=database-iam-jit" "key=created_by,value=cloudanix" > /dev/null
+            --tags $(cdx_tags_ecs) > /dev/null
         ok "Service created: $svc_name"
     fi
 }

@@ -22,6 +22,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
+export CDX_PURPOSE=jit_db
 
 require_env AWS_REGION
 
@@ -52,7 +53,7 @@ if [[ -z "$ROLE_ARN" ]]; then
                 "Action":"sts:AssumeRole"
             }]
         }' \
-        --tags "Key=Purpose,Value=database-iam-jit" "Key=created_by,Value=cloudanix" > /dev/null
+        --tags $(cdx_tags_kv) > /dev/null
     ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text)
     ok "Role created: $ROLE_NAME ($ROLE_ARN)"
 else

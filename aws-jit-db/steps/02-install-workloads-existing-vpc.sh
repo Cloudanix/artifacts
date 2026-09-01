@@ -201,7 +201,7 @@ if [[ -z "$SECRET_ARN" || "$SECRET_ARN" == "None" ]]; then
     SECRET_ARN=$(aws secretsmanager create-secret --name "$SECRET_NAME" \
         --description "Secrets for CDX JIT DB" \
         --secret-string "$SECRET_JSON" \
-        --tags "Key=Purpose,Value=database-iam-jit" "Key=created_by,Value=cloudanix" \
+        --tags $(cdx_tags_kv) \
         --query 'ARN' --output text)
     ok "Secret created: $SECRET_NAME"
 else
@@ -237,7 +237,7 @@ ECS_SG=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID"
 if [[ -z "$ECS_SG" || "$ECS_SG" == "None" ]]; then
     ECS_SG=$(aws ec2 create-security-group --group-name "${PROJECT_NAME}-ecs-sg" \
         --description "Security group for ECS cluster" --vpc-id "$VPC_ID" \
-        --tag-specifications "ResourceType=security-group,Tags=[{Key=Name,Value=${PROJECT_NAME}-ecs-sg},{Key=Purpose,Value=database-iam-jit},{Key=created_by,Value=cloudanix}]" \
+        --tag-specifications "ResourceType=security-group,Tags=[$(cdx_tags_ec2 "{Key=Name,Value=${PROJECT_NAME}-ecs-sg},")]" \
         --query 'GroupId' --output text)
     # Internal communication rules
     aws ec2 authorize-security-group-ingress --group-id "$ECS_SG" --protocol tcp --port 6032 --source-group "$ECS_SG" > /dev/null
@@ -267,7 +267,7 @@ EFS_ID=$(aws efs describe-file-systems \
 if [[ -z "$EFS_ID" || "$EFS_ID" == "None" ]]; then
     EFS_ID=$(aws efs create-file-system --performance-mode generalPurpose \
         --throughput-mode bursting --encrypted \
-        --tags "Key=Name,Value=${PROJECT_NAME}-efs" "Key=Purpose,Value=database-iam-jit" "Key=created_by,Value=cloudanix" \
+        --tags "Key=Name,Value=${PROJECT_NAME}-efs" $(cdx_tags_kv) \
         --query 'FileSystemId' --output text)
     info "Waiting for EFS..."
     while true; do
@@ -299,6 +299,7 @@ if [[ -z "$ACCESS_POINT_ID" || "$ACCESS_POINT_ID" == "None" ]]; then
     ACCESS_POINT_ID=$(aws efs create-access-point --file-system-id "$EFS_ID" \
         --posix-user "Uid=1000,Gid=1000" \
         --root-directory "Path=/proxysql-data,CreationInfo={OwnerUid=1000,OwnerGid=1000,Permissions=777}" \
+        --tags $(cdx_tags_kv) \
         --query 'AccessPointId' --output text)
     ok "EFS Access Point created: $ACCESS_POINT_ID"
 else
@@ -316,7 +317,7 @@ if [[ -z "$CLUSTER_ARN" || "$CLUSTER_ARN" == "None" ]]; then
     CLUSTER_ARN=$(aws ecs create-cluster --cluster-name "$ECS_CLUSTER_NAME" \
         --capacity-providers FARGATE FARGATE_SPOT \
         --default-capacity-provider-strategy "capacityProvider=FARGATE,weight=1" \
-        --tags "key=Purpose,value=database-iam-jit" "key=created_by,value=cloudanix" \
+        --tags $(cdx_tags_ecs) \
         --query 'cluster.clusterArn' --output text)
     ok "Cluster created: $ECS_CLUSTER_NAME"
 else
@@ -589,7 +590,7 @@ create_service() {
             --network-configuration "$NETWORK_CONFIG" \
             --enable-execute-command \
             --service-connect-configuration "$sc_config" \
-            --tags "key=Purpose,value=database-iam-jit" "key=created_by,value=cloudanix" > /dev/null
+            --tags $(cdx_tags_ecs) > /dev/null
         ok "Service created: $svc_name"
     fi
 }

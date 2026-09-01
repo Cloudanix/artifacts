@@ -45,7 +45,7 @@ else
         --peer-owner-id "$DB_ACCOUNT_ID" \
         --peer-vpc-id "$DB_VPC_ID" \
         --peer-region "$AWS_REGION" \
-        --tag-specifications "ResourceType=vpc-peering-connection,Tags=[{Key=Name,Value=cdx-jit-db-peering},{Key=Purpose,Value=db-jit},{Key=created_by,Value=cloudanix}]" \
+        --tag-specifications "ResourceType=vpc-peering-connection,Tags=[{Key=Name,Value=cdx-jit-db-peering},{Key=Purpose,Value=db-jit},{Key=Environment,Value=Prod},{Key=Created_by,Value=Cloudanix},{Key=purpose,Value=jit_db}]" \
         --query 'VpcPeeringConnection.VpcPeeringConnectionId' --output text \
         --region "$AWS_REGION")
 
