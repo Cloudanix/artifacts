@@ -64,10 +64,15 @@ fi
 if [[ -z "${SSH_KEY_INSTANCE_ID:-}" || -z "${SSH_KEY_FILE:-}" ]]; then
     echo ""
     if prompt_yes_no "Add an SSH private key for a target VM now?" "y"; then
-        # Instance ID
-        while [[ -z "${SSH_KEY_INSTANCE_ID:-}" ]]; do
-            read -erp "  Target EC2 Instance ID (e.g. i-0abc123...): " SSH_KEY_INSTANCE_ID
+        # Instance ID — must look like an EC2 instance ID (i-<hex>), so a stray
+        # 'y' or typo can't be silently stored as the key name.
+        while true; do
+            read -erp "  Target EC2 Instance ID (e.g. i-0abc123def456...): " SSH_KEY_INSTANCE_ID
             SSH_KEY_INSTANCE_ID="$(printf '%s' "${SSH_KEY_INSTANCE_ID:-}" | xargs)"
+            if [[ "$SSH_KEY_INSTANCE_ID" =~ ^i-[0-9a-f]{8,}$ ]]; then
+                break
+            fi
+            warn "That doesn't look like an instance ID. Expected 'i-' followed by hex (e.g. i-0abc123def456789)."
         done
         # Key source: file path or paste
         echo "  Provide the private key by:"
@@ -77,8 +82,17 @@ if [[ -z "${SSH_KEY_INSTANCE_ID:-}" || -z "${SSH_KEY_FILE:-}" ]]; then
         read -erp "  Select [1-2] (default 1): " key_src
         key_src="${key_src:-1}"
         if [[ "$key_src" == "2" ]]; then
-            echo "  Paste the PRIVATE KEY (including BEGIN/END lines), then press Ctrl-D:"
-            SSH_KEY_CONTENT="$(cat || true)"
+            echo "  Paste the PRIVATE KEY including the BEGIN and END lines."
+            echo "  Entry finishes automatically at the '-----END ...-----' line"
+            echo "  (or press Ctrl-D on an empty line)."
+            SSH_KEY_CONTENT=""
+            while IFS= read -r _kline || [[ -n "$_kline" ]]; do
+                SSH_KEY_CONTENT+="${_kline}"$'\n'
+                # Stop right after the END marker so no Ctrl-D is required.
+                [[ "$_kline" == *"-----END"*"-----"* ]] && break
+            done
+            # Trim leading/trailing blank lines.
+            SSH_KEY_CONTENT="$(printf '%s' "$SSH_KEY_CONTENT" | sed -e '/./,$!d')"
         else
             while [[ -z "${SSH_KEY_FILE:-}" ]]; do
                 read -erp "  Path to private key file: " SSH_KEY_FILE
