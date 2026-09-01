@@ -30,43 +30,35 @@ STATE_FILE="$SCRIPT_DIR/.state.json"
 # =============================================================================
 
 if [[ "${1:-}" == "--cleanup" ]]; then
-    if [[ ! -f "$STATE_FILE" ]]; then
-        error "No state file found. Nothing to clean up."
-        exit 1
-    fi
-
-    local_state=$(load_state "$STATE_FILE") || {
-        error "State file is corrupted. Cannot determine what to clean up."
-        exit 1
-    }
-
     echo ""
     echo -e "${_CLR_BOLD}=== Cleanup: $SETUP_DISPLAY_NAME ===${_CLR_RESET}"
     echo ""
-    echo "The following steps were completed:"
-    echo ""
 
-    scope_mode=$(echo "$local_state" | jq -r '.scope_mode')
-    steps_str="${STEPS_FOR_MODE[$scope_mode]}"
-    all_steps=($steps_str)
-
-    completed_steps=()
-    for s in "${all_steps[@]}"; do
-        if is_step_complete "$STATE_FILE" "$s"; then
-            label="${STEP_LABELS[$s]:-$s}"
-            account="${STEP_ACCOUNT[$s]:-unknown}"
-            echo "  ✓ $label (${ACCOUNT_LABELS[$account]:-$account})"
-            completed_steps+=("$s")
-        fi
-    done
-
-    echo ""
-    if [[ ${#completed_steps[@]} -eq 0 ]]; then
-        info "No steps completed. Nothing to clean up."
-        exit 0
+    # Cleanup is DISCOVERY-BASED and does not require a state file. If state
+    # exists, show a summary of completed steps as a courtesy; otherwise the
+    # cleanup script finds resources by their well-known names and tags.
+    if [[ -f "$STATE_FILE" ]] && local_state=$(load_state "$STATE_FILE" 2>/dev/null); then
+        echo "The following steps were recorded as completed:"
+        echo ""
+        scope_mode=$(echo "$local_state" | jq -r '.scope_mode')
+        steps_str="${STEPS_FOR_MODE[$scope_mode]:-}"
+        all_steps=($steps_str)
+        for s in "${all_steps[@]}"; do
+            if is_step_complete "$STATE_FILE" "$s"; then
+                label="${STEP_LABELS[$s]:-$s}"
+                account="${STEP_ACCOUNT[$s]:-unknown}"
+                echo "  ✓ $label (${ACCOUNT_LABELS[$account]:-$account})"
+            fi
+        done
+        echo ""
+    else
+        info "No (valid) state file found — running discovery-based cleanup."
+        info "Resources will be located by their well-known names and tags."
+        echo ""
     fi
 
-    if ! prompt_yes_no "Proceed with cleanup? This will remove all created resources" "n"; then
+    warn "This removes JIT VM resources discovered in the CURRENT account/region."
+    if ! prompt_yes_no "Proceed with cleanup? This will remove created resources" "n"; then
         info "Cleanup cancelled."
         exit 0
     fi
@@ -74,7 +66,8 @@ if [[ "${1:-}" == "--cleanup" ]]; then
     if [[ -f "$SCRIPT_DIR/cleanup/cleanup.sh" ]]; then
         source "$SCRIPT_DIR/cleanup/cleanup.sh"
     else
-        warn "No cleanup script found at $SCRIPT_DIR/cleanup/cleanup.sh"
+        error "No cleanup script found at $SCRIPT_DIR/cleanup/cleanup.sh"
+        exit 1
     fi
     exit 0
 fi
