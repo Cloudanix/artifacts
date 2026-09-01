@@ -40,8 +40,9 @@ TASK_FAMILY="cdx-jit-k8s-bastion"
 SERVICE_NAME="cdx-jit-k8s-bastion"
 BASTION_IMAGE="public.ecr.aws/amazonlinux/amazonlinux:2023"
 
-# Standard tags (matches existing setups)
-TAG_SPEC="{Key=owner,Value=cloudanix},{Key=purpose,Value=cdx-jit-k8s},{Key=created_by,Value=cloudanix},{Key=service,Value=bastion},{Key=scope,Value=hub}"
+# Standard Cloudanix tags (Environment/Created_by/purpose) plus EKS-specific
+# service/scope tags. purpose=jit_k8s matches the cdx_tags_* convention.
+TAG_SPEC="{Key=Environment,Value=Prod},{Key=Created_by,Value=Cloudanix},{Key=purpose,Value=jit_k8s},{Key=service,Value=bastion},{Key=scope,Value=hub}"
 
 VPC_BASE=$(echo "$VPC_CIDR" | cut -d'.' -f1-2)
 PUB_SUB_1_CIDR="${VPC_BASE}.1.0/24"
@@ -181,7 +182,7 @@ ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output
 if [[ -z "$ROLE_ARN" ]]; then
     aws iam create-role --role-name "$ROLE_NAME" \
         --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}' \
-        --tags "Key=owner,Value=cloudanix" "Key=purpose,Value=cdx-jit-k8s" "Key=created_by,Value=cloudanix" "Key=service,Value=bastion" "Key=scope,Value=hub" > /dev/null
+        --tags "Key=Environment,Value=Prod" "Key=Created_by,Value=Cloudanix" "Key=purpose,Value=jit_k8s" "Key=service,Value=bastion" "Key=scope,Value=hub" > /dev/null
     ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text)
     ok "Task role created: $ROLE_NAME"
 else
@@ -254,7 +255,7 @@ else
     CLUSTER_ARN=$(aws ecs create-cluster --cluster-name "$ECS_CLUSTER_NAME" \
         --capacity-providers FARGATE FARGATE_SPOT \
         --default-capacity-provider-strategy "capacityProvider=FARGATE,weight=1" \
-        --tags "key=owner,value=cloudanix" "key=purpose,value=cdx-jit-k8s" "key=created_by,value=cloudanix" \
+        --tags "key=Environment,value=Prod" "key=Created_by,value=Cloudanix" "key=purpose,value=jit_k8s" \
         --query 'cluster.clusterArn' --output text)
     ok "Cluster created: $ECS_CLUSTER_NAME"
 fi
@@ -282,9 +283,9 @@ TASK_DEF=$(jq -n \
             logConfiguration: {logDriver: "awslogs", options: {"awslogs-group": $lg, "awslogs-region": $region, "awslogs-stream-prefix": "bastion"}}
         }],
         tags: [
-            {key:"owner", value:"cloudanix"},
-            {key:"purpose", value:"cdx-jit-k8s"},
-            {key:"created_by", value:"cloudanix"},
+            {key:"Environment", value:"Prod"},
+            {key:"Created_by", value:"Cloudanix"},
+            {key:"purpose", value:"jit_k8s"},
             {key:"service", value:"bastion"},
             {key:"scope", value:"hub"}
         ]
@@ -316,7 +317,7 @@ else
         --platform-version LATEST \
         --enable-execute-command \
         --network-configuration "$NETWORK_CONFIG" \
-        --tags "key=owner,value=cloudanix" "key=purpose,value=cdx-jit-k8s" "key=created_by,value=cloudanix" "key=service,value=bastion" "key=scope,value=hub" > /dev/null
+        --tags "key=Environment,value=Prod" "key=Created_by,value=Cloudanix" "key=purpose,value=jit_k8s" "key=service,value=bastion" "key=scope,value=hub" > /dev/null
     ok "Service created: $SERVICE_NAME"
 fi
 
