@@ -509,6 +509,10 @@ step "Executing Setup Steps"
 echo ""
 info "Total steps: $TOTAL_STEPS"
 
+# Steps that prompt the user must run attached to the terminal (no output pipe),
+# otherwise buffered prompt text appears only after the user blindly hits Enter.
+INTERACTIVE_STEPS="06-store-ssh-key"
+
 CURRENT_ACCOUNT=""
 STEP_NUM=0
 
@@ -572,18 +576,32 @@ for step_id in "${ALL_STEPS[@]}"; do
         fi
     done < <(echo "$steps_json" | jq -r '[.[] | select(.status == "complete") | .outputs // {} | to_entries[]] | .[] | "\(.key)=\(.value)"')
 
-    # Execute step script, streaming its output live so long-running waits
-    # (NAT gateway, EFS, ECS services-stable) don't look like a hang. We tee to
-    # a temp file, hide OUTPUT: lines from the live view, then parse OUTPUT:
-    # lines from the file afterward for state.
+    # Execute step script. Steps that prompt the user (interactive) must run
+    # attached directly to the terminal — piping their stdout through tee|grep
+    # buffers prompt text so it appears only after the user blindly presses
+    # Enter. Non-interactive steps are streamed via tee so long AWS waits don't
+    # look like a hang, while OUTPUT: lines are hidden live and parsed after.
     step_exit_code=0
     step_log=$(mktemp "${TMPDIR:-/tmp}/cdx-step.XXXXXX")
-    # Disable errexit around the pipe so we can read the step script's real
-    # exit code from PIPESTATUS[0] (a trailing '|| true' would overwrite it).
-    set +e
-    bash "$step_script" 2>&1 | tee "$step_log" | grep -v "^OUTPUT:"
-    step_exit_code=${PIPESTATUS[0]}
-    set -e
+    case " $INTERACTIVE_STEPS " in
+        *" $step_id "*)
+            # Interactive: no pipe on the main data path so prompts are not
+            # buffered. Tee a copy to the log via process substitution (stdout
+            # still reaches the terminal through /dev/tty).
+            set +e
+            bash "$step_script" > >(tee "$step_log" >/dev/tty) 2>&1
+            step_exit_code=$?
+            set -e
+            # Let the tee process-substitution flush to the log before parsing.
+            sleep 1
+            ;;
+        *)
+            set +e
+            bash "$step_script" 2>&1 | tee "$step_log" | grep -v "^OUTPUT:"
+            step_exit_code=${PIPESTATUS[0]}
+            set -e
+            ;;
+    esac
     step_output=$(cat "$step_log")
     rm -f "$step_log"
 
