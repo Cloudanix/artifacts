@@ -468,6 +468,85 @@ get_config_value() {
     jq -r --arg key "$key" '.config[$key] // ""' "$state_file"
 }
 
+# get_any_step_output STATE_FILE KEY
+#   Returns the first non-empty output value for KEY across all completed steps.
+#   Useful when we don't want to hard-code which step produced an output.
+get_any_step_output() {
+    local state_file="$1"
+    local key="$2"
+    jq -r --arg key "$key" \
+        '[.steps[]?.outputs[$key]? | select(. != null and . != "")] | .[0] // ""' \
+        "$state_file"
+}
+
+# cdx_share_summary STATE_FILE SETUP_TYPE
+#   Prints a JSON block containing exactly the infrastructure details the
+#   Cloudanix onboarding team needs, read from the state file. Contains NO
+#   secrets (tokens/keys are never included). Shape depends on the product.
+cdx_share_summary() {
+    local state_file="$1"
+    local setup_type="$2"
+
+    if [[ ! -f "$state_file" ]]; then
+        error "No state file found. Run a setup first, then re-run --share."
+        return 1
+    fi
+
+    local region jit_acct cluster ps_arn ps_name
+    region=$(get_config_value "$state_file" "AWS_REGION")
+
+    case "$setup_type" in
+        aws-jit-db)
+            jit_acct=$(get_config_value "$state_file" "JIT_ACCOUNT_ID")
+            cluster=$(get_config_value "$state_file" "ECS_CLUSTER_NAME")
+            [[ -z "$cluster" ]] && cluster="cdx-jit-db-cluster"
+            ps_arn=$(get_any_step_output "$state_file" "PERMISSION_SET_ARN")
+            ps_name=$(get_config_value "$state_file" "PERMISSION_SET_NAME")
+            [[ -z "$ps_name" ]] && ps_name="cdx-EcsSsmAccess"
+            jq -n \
+                --arg acct "$jit_acct" --arg cl "$cluster" --arg region "$region" \
+                --arg rarn "$ps_arn" --arg rname "$ps_name" \
+                '[{
+                    ssm_account: {account_identifier: $acct, domain_type: "AWS"},
+                    ssm_cluster: {cluster_name: $cl, cluster_list: [$cl], cluster_region: $region},
+                    ssm_role: {role_identifier: $rarn, role_name: $rname}
+                }]'
+            ;;
+        aws-jit-vm)
+            jit_acct=$(get_config_value "$state_file" "JIT_ACCOUNT_ID")
+            cluster=$(get_config_value "$state_file" "CLUSTER_NAME")
+            [[ -z "$cluster" ]] && cluster="cdx-jit-vm-cluster"
+            ps_arn=$(get_any_step_output "$state_file" "PERMISSION_SET_ARN")
+            ps_name=$(get_config_value "$state_file" "PERMISSION_SET_NAME")
+            [[ -z "$ps_name" ]] && ps_name="cdx-EcsVmSsmAccess"
+            jq -n \
+                --arg acct "$jit_acct" --arg cl "$cluster" --arg region "$region" \
+                --arg rarn "$ps_arn" --arg rname "$ps_name" \
+                '[{
+                    ssm_account: {account_identifier: $acct, domain_type: "AWS"},
+                    ssm_cluster: {cluster_list: [$cl], cluster_region: $region},
+                    ssm_role: {role_identifier: $rarn, role_name: $rname}
+                }]'
+            ;;
+        aws-jit-eks)
+            jit_acct=$(get_config_value "$state_file" "JIT_ACCOUNT_ID")
+            jq -n \
+                --arg acct "$jit_acct" --arg region "$region" \
+                '[{
+                    jump_server_account: {domain_type: "AWS", account_identifier: $acct},
+                    jump_server_details: {
+                        server_tags: {owner: "cloudanix", service: "bastion", purpose: "cdx-jit-k8s"},
+                        server_region: $region
+                    }
+                }]'
+            ;;
+        *)
+            error "Unknown setup type '$setup_type' for --share."
+            return 1
+            ;;
+    esac
+}
+
 # =============================================================================
 # ACCOUNT VERIFICATION FUNCTIONS
 # =============================================================================
@@ -864,6 +943,7 @@ export -f _timestamp log ok info warn error step
 export -f prompt_with_default prompt_yes_no prompt_selection
 export -f init_state save_state load_state mark_step_complete is_step_complete
 export -f get_step_output set_config_value get_config_value
+export -f get_any_step_output cdx_share_summary
 export -f verify_aws_account verify_azure_subscription
 export -f prompt_aws_credentials switch_aws_account
 export -f validate_aws_account_id validate_azure_subscription_id validate_cidr
