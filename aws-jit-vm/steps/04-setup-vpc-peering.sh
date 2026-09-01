@@ -16,6 +16,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
+export CDX_PURPOSE=jit_vm
 
 require_env AWS_REGION VPC_ID VM_ACCOUNT_ID VM_VPC_ID VM_VPC_CIDR ECS_SG_ID
 
@@ -44,7 +45,7 @@ else
         --peer-owner-id "$VM_ACCOUNT_ID" \
         --peer-vpc-id "$VM_VPC_ID" \
         --peer-region "$AWS_REGION" \
-        --tag-specifications "ResourceType=vpc-peering-connection,Tags=[{Key=Name,Value=cdx-jit-vm-peering},{Key=Purpose,Value=vm-jit},{Key=created_by,Value=cloudanix}]" \
+        --tag-specifications "ResourceType=vpc-peering-connection,Tags=[$(cdx_tags_ec2 "{Key=Name,Value=cdx-jit-vm-peering},")]" \
         --query 'VpcPeeringConnection.VpcPeeringConnectionId' --output text \
         --region "$AWS_REGION")
 
