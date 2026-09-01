@@ -38,6 +38,7 @@ SECRET_NAME="$(get_cfg SECRET_NAME)"; [[ -z "$SECRET_NAME" ]] && SECRET_NAME="CD
 CLUSTER_NAME="${PROJECT_NAME}-cluster"
 ROLE_NAME="${PROJECT_NAME}-ECSRole"
 NAMESPACE_NAME="proxysql-proxyserver"
+PERMISSION_SET_NAME="$(get_cfg PERMISSION_SET_NAME)"; [[ -z "$PERMISSION_SET_NAME" ]] && PERMISSION_SET_NAME="cdx-EcsSsmAccess"
 
 info "Region: $AWS_REGION | Project: $PROJECT_NAME | Account: $ACCOUNT_ID"
 info "Scope hint: ${SCOPE_MODE:-<none>}"
@@ -270,5 +271,10 @@ fi
 
 echo ""
 ok "Cleanup complete."
-warn "Cross-account DB resources (cross-account role, RDS SG rules, DB VPC"
-warn "routes) in the database account must be cleaned up manually."
+echo ""
+warn "The following are NOT removed automatically and must be cleaned up manually:"
+warn "  • SSO permission set '${PERMISSION_SET_NAME}' in the Management account"
+warn "    (IAM Identity Center) — it may be assigned to users/groups. Remove its"
+warn "    account assignments first, then delete the permission set if unused."
+warn "  • Cross-account DB resources in the Database account: the cross-account"
+warn "    role, RDS security-group rules, and DB VPC routes."
