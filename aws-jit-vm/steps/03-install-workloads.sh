@@ -259,7 +259,7 @@ sleep 10
 step "CloudWatch Log Group"
 aws logs create-log-group --log-group-name "$LOG_GROUP" 2>/dev/null || true
 aws logs put-retention-policy --log-group-name "$LOG_GROUP" --retention-in-days 30 2>/dev/null || true
-aws logs tag-log-group --log-group-name "$LOG_GROUP" --tags "Environment=Prod,Created_by=Cloudanix,purpose=jit_vm" 2>/dev/null || true
+aws logs tag-log-group --log-group-name "$LOG_GROUP" --tags "Environment=Prod,Created_by=Cloudanix,purpose=jit_vm,aws-apn-id=${CDX_APN_ID}" 2>/dev/null || true
 ok "Log group: $LOG_GROUP"
 
 # =============================================================================

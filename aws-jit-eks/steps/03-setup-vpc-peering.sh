@@ -44,7 +44,7 @@ else
         --peer-owner-id "$EKS_ACCOUNT_ID" \
         --peer-vpc-id "$EKS_VPC_ID" \
         --peer-region "$AWS_REGION" \
-        --tag-specifications "ResourceType=vpc-peering-connection,Tags=[{Key=Name,Value=cdx-jit-eks-peering},{Key=Purpose,Value=eks-jit},{Key=Environment,Value=Prod},{Key=Created_by,Value=Cloudanix},{Key=purpose,Value=jit_k8s}]" \
+        --tag-specifications "ResourceType=vpc-peering-connection,Tags=[{Key=Name,Value=cdx-jit-eks-peering},{Key=Purpose,Value=eks-jit},{Key=Environment,Value=Prod},{Key=Created_by,Value=Cloudanix},{Key=purpose,Value=jit_k8s},{Key=aws-apn-id,Value=${CDX_APN_ID}}]" \
         --query 'VpcPeeringConnection.VpcPeeringConnectionId' --output text \
         --region "$AWS_REGION")
 

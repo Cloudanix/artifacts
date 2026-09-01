@@ -41,25 +41,31 @@ _CDX_COMMON_LOADED="true"
 
 cdx_purpose() { echo "${CDX_PURPOSE:-jit}"; }
 
+# AWS Partner Network (APN) attribution tag applied to every created resource.
+# The value contains a ':' which is valid in AWS tag values and is NOT a
+# delimiter in the CLI shorthand (delimiters are ',' and '='), so it is safe
+# in all tag formats below.
+CDX_APN_ID="${CDX_APN_ID:-pc:2k1o8bijfwf7aykfulhgkc2uo}"
+
 cdx_tags_ec2() {
     local extra="${1:-}"  # optional leading "{Key=Name,Value=x}," prefix caller can pass
-    echo "${extra}{Key=Environment,Value=Prod},{Key=Created_by,Value=Cloudanix},{Key=purpose,Value=$(cdx_purpose)}"
+    echo "${extra}{Key=Environment,Value=Prod},{Key=Created_by,Value=Cloudanix},{Key=purpose,Value=$(cdx_purpose)},{Key=aws-apn-id,Value=${CDX_APN_ID}}"
 }
 
 cdx_tags_kv() {
-    echo "Key=Environment,Value=Prod Key=Created_by,Value=Cloudanix Key=purpose,Value=$(cdx_purpose)"
+    echo "Key=Environment,Value=Prod Key=Created_by,Value=Cloudanix Key=purpose,Value=$(cdx_purpose) Key=aws-apn-id,Value=${CDX_APN_ID}"
 }
 
 cdx_tags_ecs() {
-    echo "key=Environment,value=Prod key=Created_by,value=Cloudanix key=purpose,value=$(cdx_purpose)"
+    echo "key=Environment,value=Prod key=Created_by,value=Cloudanix key=purpose,value=$(cdx_purpose) key=aws-apn-id,value=${CDX_APN_ID}"
 }
 
 cdx_tags_json() {
-    printf '[{"Key":"Environment","Value":"Prod"},{"Key":"Created_by","Value":"Cloudanix"},{"Key":"purpose","Value":"%s"}]' "$(cdx_purpose)"
+    printf '[{"Key":"Environment","Value":"Prod"},{"Key":"Created_by","Value":"Cloudanix"},{"Key":"purpose","Value":"%s"},{"Key":"aws-apn-id","Value":"%s"}]' "$(cdx_purpose)" "$CDX_APN_ID"
 }
 
 cdx_tags_json_lc() {
-    printf '[{"key":"Environment","value":"Prod"},{"key":"Created_by","value":"Cloudanix"},{"key":"purpose","value":"%s"}]' "$(cdx_purpose)"
+    printf '[{"key":"Environment","value":"Prod"},{"key":"Created_by","value":"Cloudanix"},{"key":"purpose","value":"%s"},{"key":"aws-apn-id","value":"%s"}]' "$(cdx_purpose)" "$CDX_APN_ID"
 }
 
 # =============================================================================
