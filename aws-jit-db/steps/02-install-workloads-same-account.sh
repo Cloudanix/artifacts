@@ -333,6 +333,17 @@ for SUB in "$PRIVATE_SUBNET_1_ID" "$PRIVATE_SUBNET_2_ID"; do
     fi
 done
 
+# CRITICAL: wait until ALL mount targets are 'available' before launching ECS
+# tasks that mount EFS (otherwise the task fails to resolve the mount target).
+info "Waiting for EFS mount targets to become available..."
+for _i in $(seq 1 40); do
+    NOT_READY=$(aws efs describe-mount-targets --file-system-id "$EFS_ID" \
+        --query "length(MountTargets[?LifeCycleState!='available'])" --output text 2>/dev/null)
+    [[ "$NOT_READY" == "0" ]] && break
+    sleep 5
+done
+ok "EFS mount targets available"
+
 # Access point
 ACCESS_POINT_ID=$(aws efs describe-access-points \
     --query "AccessPoints[?FileSystemId=='${EFS_ID}' && RootDirectory.Path=='/proxysql-data'].AccessPointId | [0]" \

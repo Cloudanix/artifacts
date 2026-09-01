@@ -390,6 +390,18 @@ for SUB in "$PRIV_SUB_1" "$PRIV_SUB_2"; do
     fi
 done
 
+# CRITICAL: wait until ALL mount targets are 'available'. ECS tasks that mount
+# EFS fail with a DNS resolution / MountTargetConflict error if they launch
+# before the mount targets are ready (they can take 60-90s to provision).
+info "Waiting for EFS mount targets to become available..."
+for _i in $(seq 1 40); do
+    NOT_READY=$(aws efs describe-mount-targets --file-system-id "$EFS_ID" \
+        --query "length(MountTargets[?LifeCycleState!='available'])" --output text 2>/dev/null)
+    [[ "$NOT_READY" == "0" ]] && break
+    sleep 5
+done
+ok "EFS mount targets available"
+
 # Access point
 ACCESS_POINT_ID=$(aws efs describe-access-points \
     --query "AccessPoints[?FileSystemId=='${EFS_ID}' && RootDirectory.Path=='/proxysql-data'].AccessPointId | [0]" \

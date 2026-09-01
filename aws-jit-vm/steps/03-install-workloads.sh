@@ -358,8 +358,14 @@ for SUB in "$PRIV_SUB_1" "$PRIV_SUB_2"; do
             --security-groups "$ECS_SG" > /dev/null
     fi
 done
-info "Waiting for mount targets..."
-sleep 20
+info "Waiting for mount targets to become available..."
+for _i in $(seq 1 40); do
+    NOT_READY=$(aws efs describe-mount-targets --file-system-id "$EFS_ID" \
+        --query "length(MountTargets[?LifeCycleState!='available'])" --output text 2>/dev/null)
+    [[ "$NOT_READY" == "0" ]] && break
+    sleep 5
+done
+ok "EFS mount targets available"
 
 SSHPIPER_AP=$(aws efs describe-access-points --file-system-id "$EFS_ID" \
     --query "AccessPoints[?Tags[?Key=='Name'&&Value=='${PROJECT_NAME}-sshpiper-ap']].AccessPointId | [0]" --output text 2>/dev/null)
