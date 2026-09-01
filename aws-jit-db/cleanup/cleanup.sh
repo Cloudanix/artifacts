@@ -201,8 +201,28 @@ done
 ok "Custom IAM policies deleted"
 
 # =============================================================================
-# 9. DELETE VPC (new-vpc scope — discover by Name tag)
+# 9a. DELETE OUR OWN SECURITY GROUPS IN ANY VPC (safe for existing-vpc/same-account)
 # =============================================================================
+# In existing-vpc / same-account scopes we deploy into a CUSTOMER VPC we must
+# NOT delete, but we still create our own ECS security group in it. Remove ONLY
+# our named SGs (base <project>-ecs-sg and numbered <project>-ecs-sg-N) — never
+# the customer's VPC or any resource we didn't create.
+
+step "Our Security Groups (any VPC)"
+for SG in $(aws ec2 describe-security-groups \
+    --filters "Name=group-name,Values=${PROJECT_NAME}-ecs-sg,${PROJECT_NAME}-ecs-sg-*" \
+    --query 'SecurityGroups[*].GroupId' --output text 2>/dev/null); do
+    [[ -z "$SG" || "$SG" == "None" ]] && continue
+    aws ec2 delete-security-group --group-id "$SG" 2>/dev/null || true
+    ok "Security group deleted: $SG"
+done
+
+# =============================================================================
+# 9b. DELETE VPC (new-vpc scope ONLY — discover by our Name tag)
+# =============================================================================
+# Runs ONLY when a VPC tagged Name=<project>-vpc exists, which is set exclusively
+# when the tool CREATES a VPC (new-vpc scope). A customer's existing VPC is never
+# tagged this way, so it is never matched or deleted here.
 
 VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=${PROJECT_NAME}-vpc" \
     --query 'Vpcs[0].VpcId' --output text 2>/dev/null)

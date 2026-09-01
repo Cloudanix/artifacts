@@ -196,8 +196,41 @@ if aws iam get-role --role-name "$ROLE_NAME" > /dev/null 2>&1; then
 fi
 
 # =============================================================================
-# 9. DELETE VPC (new-vpc scope — discover by Name tag)
+# 9a. DELETE OUR OWN RESOURCES IN ANY VPC (safe for existing-vpc scope)
 # =============================================================================
+# In existing-vpc scope we deploy into a CUSTOMER VPC that we must NOT delete.
+# But we still create our own security groups and SSM VPC endpoints inside it.
+# Remove ONLY those, matched by our project-specific names — never the
+# customer's VPC, subnets, IGW, NAT, or route tables.
+
+step "Our SGs + VPC Endpoints (any VPC)"
+# Our SSM interface endpoints, identified by our Name tag prefix.
+for VPCE in $(aws ec2 describe-vpc-endpoints \
+    --filters "Name=tag:Name,Values=${PROJECT_NAME}-ssm,${PROJECT_NAME}-ssmmessages,${PROJECT_NAME}-ec2messages" \
+    --query 'VpcEndpoints[?State!=`deleted` && State!=`deleting`].VpcEndpointId' --output text 2>/dev/null); do
+    [[ -z "$VPCE" || "$VPCE" == "None" ]] && continue
+    aws ec2 delete-vpc-endpoints --vpc-endpoint-ids "$VPCE" > /dev/null 2>&1 || true
+    ok "VPC endpoint deleted: $VPCE"
+done
+# Give endpoint ENIs a moment to detach before deleting the SGs.
+sleep 10
+# Our security groups, identified by our exact group names (in any VPC).
+for GN in "${PROJECT_NAME}-ecs-sg" "${PROJECT_NAME}-vpce-sg"; do
+    for SG in $(aws ec2 describe-security-groups \
+        --filters "Name=group-name,Values=${GN}" \
+        --query 'SecurityGroups[*].GroupId' --output text 2>/dev/null); do
+        [[ -z "$SG" || "$SG" == "None" ]] && continue
+        aws ec2 delete-security-group --group-id "$SG" 2>/dev/null || true
+        ok "Security group deleted: $GN ($SG)"
+    done
+done
+
+# =============================================================================
+# 9b. DELETE VPC (new-vpc scope ONLY — discover by our Name tag)
+# =============================================================================
+# This block runs ONLY when a VPC tagged Name=<project>-vpc exists, which the
+# tool sets exclusively when it CREATES a VPC (new-vpc scope). A customer's
+# existing VPC is never tagged this way, so it is never matched or deleted.
 
 VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=${PROJECT_NAME}-vpc" \
     --query 'Vpcs[0].VpcId' --output text 2>/dev/null)
