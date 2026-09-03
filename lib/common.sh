@@ -741,7 +741,9 @@ validate_alphanumeric_dash() {
 
 validate_semver_or_latest() {
     local value="$1"
-    [[ "$value" == "latest" ]] || [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]
+    # Accept "latest" or a semver with an OPTIONAL leading "v" and an optional
+    # pre-release/patch suffix, e.g. v0.3.27, 0.3.27, v0.3.9-patch-2.
+    [[ "$value" == "latest" ]] || [[ "$value" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]
 }
 
 validate_boolean() {

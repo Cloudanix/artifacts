@@ -16,7 +16,11 @@
 set -euo pipefail
 
 VERSION="1.0.0"
-REPO_BASE="https://raw.githubusercontent.com/Cloudanix/artifacts/Divyansh-master-script"
+# Branch/ref to pull setup files from. Override for testing a feature branch:
+#   CDX_REPO_REF=ecr-changes curl ... | bash -s -- aws-jit-db
+# or point REPO_BASE at any raw base URL directly via CDX_REPO_BASE.
+CDX_REPO_REF="${CDX_REPO_REF:-Divyansh-master-script}"
+REPO_BASE="${CDX_REPO_BASE:-https://raw.githubusercontent.com/Cloudanix/artifacts/${CDX_REPO_REF}}"
 INSTALL_DIR="${CDX_INSTALL_DIR:-$HOME/.cdx-jit}"
 
 # Colors
