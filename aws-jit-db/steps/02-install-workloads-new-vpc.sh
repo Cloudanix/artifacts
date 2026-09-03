@@ -740,8 +740,8 @@ create_service "proxysql" "proxysql" 1 \
 info "Waiting for ProxySQL to stabilize..."
 aws ecs wait services-stable --cluster "$ECS_CLUSTER_NAME" --services proxysql 2>/dev/null || true
 
-# ProxyServer service (2 replicas) — needs proxysql via Service Connect
-create_service "proxyserver" "proxyserver-task" 2 \
+# ProxyServer service (1 replica) — needs proxysql via Service Connect
+create_service "proxyserver" "proxyserver-task" 1 \
     '{"enabled":true,"namespace":"proxysql-proxyserver","services":[{"portName":"proxyserver-http","discoveryName":"proxyserver","clientAliases":[{"port":8079,"dnsName":"proxyserver"}]}]}'
 
 # DAM: PostgreSQL first (query-logging depends on it)

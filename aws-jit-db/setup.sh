@@ -370,6 +370,29 @@ if [[ "$RESUME_MODE" == true ]]; then
 fi
 
 # =============================================================================
+# OPTIONAL VPC PEERING (onboard-new-account)
+# =============================================================================
+# When the operator opts out of VPC peering (SETUP_PEERING=false), drop the
+# peering-creation step (10-onboard-peering). The acceptance step
+# (04-accept-peering) stays but runs in SG-whitelist-only mode. This lets a
+# customer that only needs role setup + SG whitelisting skip peering entirely.
+if [[ "$SELECTED_SCOPE_MODE" == "onboard-new-account" ]]; then
+    _setup_peering=$(get_config_value "$STATE_FILE" "SETUP_PEERING")
+    if [[ "$_setup_peering" == "false" ]]; then
+        info "VPC peering disabled — skipping peering creation (role + SG whitelist only)"
+        _filtered=()
+        for _s in "${ALL_STEPS[@]}"; do
+            [[ "$_s" == "10-onboard-peering" ]] && continue
+            _filtered+=("$_s")
+        done
+        ALL_STEPS=("${_filtered[@]}")
+        TOTAL_STEPS=${#ALL_STEPS[@]}
+        # Ensure the accept step knows to run SG-only.
+        export SETUP_PEERING="false"
+    fi
+fi
+
+# =============================================================================
 # COLLECT CREDENTIALS FOR ALL ACCOUNTS UP FRONT
 # =============================================================================
 # We determine which unique accounts are needed for the remaining steps,

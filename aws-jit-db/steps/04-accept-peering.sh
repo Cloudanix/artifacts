@@ -18,14 +18,25 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
 
-require_env AWS_REGION PEERING_CONNECTION_ID DB_VPC_ID DB_SECURITY_GROUP_IDS
+# SETUP_PEERING controls whether this step does the full peering acceptance +
+# route tables, or only security-group whitelisting. Defaults to true so
+# existing flows are unchanged.
+SETUP_PEERING="${SETUP_PEERING:-true}"
+
+if [[ "$SETUP_PEERING" == "true" ]]; then
+    require_env AWS_REGION PEERING_CONNECTION_ID DB_VPC_ID DB_SECURITY_GROUP_IDS
+else
+    # No-peering mode: we only whitelist the DB security groups for the hub
+    # CIDR. Peering acceptance and route tables are skipped.
+    require_env AWS_REGION DB_SECURITY_GROUP_IDS HUB_VPC_CIDR
+fi
 
 # VPC_CIDR is the hub (requester) CIDR. In onboard-new-account scope it's not a
 # config field — fall back to HUB_VPC_CIDR output, then to the peering itself.
 if [[ -z "${VPC_CIDR:-}" ]]; then
     VPC_CIDR="${HUB_VPC_CIDR:-}"
 fi
-if [[ -z "$VPC_CIDR" ]]; then
+if [[ -z "$VPC_CIDR" && "$SETUP_PEERING" == "true" ]]; then
     VPC_CIDR=$(aws ec2 describe-vpc-peering-connections \
         --vpc-peering-connection-ids "$PEERING_CONNECTION_ID" \
         --query 'VpcPeeringConnections[0].RequesterVpcInfo.CidrBlock' --output text \
@@ -35,9 +46,16 @@ if [[ -z "$VPC_CIDR" || "$VPC_CIDR" == "None" ]]; then
     error "Could not determine hub VPC CIDR"; exit 1
 fi
 
+if [[ "$SETUP_PEERING" != "true" ]]; then
+    info "VPC peering disabled (SETUP_PEERING=false) — SG whitelisting only"
+    info "Hub CIDR: $VPC_CIDR"
+fi
+
 # =============================================================================
 # ACCEPT PEERING
 # =============================================================================
+
+if [[ "$SETUP_PEERING" == "true" ]]; then
 
 step "Accept VPC Peering"
 info "Peering ID: $PEERING_CONNECTION_ID"
@@ -88,6 +106,8 @@ for RT_ID in $ROUTE_TABLES; do
 done
 ok "Routes updated: $VPC_CIDR → $PEERING_CONNECTION_ID"
 
+fi  # end SETUP_PEERING accept + route tables
+
 # =============================================================================
 # UPDATE DB SECURITY GROUPS
 # =============================================================================
@@ -111,10 +131,14 @@ done
 # OUTPUT
 # =============================================================================
 
-FINAL_STATUS=$(aws ec2 describe-vpc-peering-connections \
-    --vpc-peering-connection-ids "$PEERING_CONNECTION_ID" \
-    --query 'VpcPeeringConnections[0].Status.Code' --output text \
-    --region "$AWS_REGION")
-
-ok "Peering acceptance complete (status: $FINAL_STATUS)"
-echo "OUTPUT:PEERING_STATUS=${FINAL_STATUS}"
+if [[ "$SETUP_PEERING" == "true" ]]; then
+    FINAL_STATUS=$(aws ec2 describe-vpc-peering-connections \
+        --vpc-peering-connection-ids "$PEERING_CONNECTION_ID" \
+        --query 'VpcPeeringConnections[0].Status.Code' --output text \
+        --region "$AWS_REGION")
+    ok "Peering acceptance complete (status: $FINAL_STATUS)"
+    echo "OUTPUT:PEERING_STATUS=${FINAL_STATUS}"
+else
+    ok "SG whitelisting complete (no peering)"
+    echo "OUTPUT:PEERING_STATUS=skipped"
+fi

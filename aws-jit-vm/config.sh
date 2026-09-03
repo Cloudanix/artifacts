@@ -95,6 +95,7 @@ CONFIG_FIELDS=(
     "SSO_INSTANCE_ARN|arn|arn:aws:sso:::instance/ssoins-722367552337aabd|SSO Instance ARN|new-vpc,existing-vpc|false"
     "PROJECT_NAME|alphanumeric_dash|cdx-jit-vm|Project Name|*|false"
     "CLUSTER_NAME|alphanumeric_dash|cdx-jit-vm-cluster|ECS Cluster Name|new-vpc,existing-vpc|false"
+    "IMAGE_TAG|semver_or_latest|v0.3.31|Image Tag (e.g. v0.3.31)|new-vpc,existing-vpc|false"
     "VPC_CIDR|cidr|10.50.0.0/16|VPC CIDR Block|new-vpc|false"
     "S3_BUCKET_NAME|alphanumeric_dash|cdx-jit-vm-recordings|S3 Bucket for Recordings|new-vpc,existing-vpc|false"
     "CDX_API_AUTH_TOKEN|nonempty||CDX API Auth Token|new-vpc,existing-vpc|true"

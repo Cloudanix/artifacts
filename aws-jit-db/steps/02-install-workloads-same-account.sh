@@ -675,8 +675,8 @@ create_service() {
 create_service "proxysql" "$TD_PROXYSQL" 1 \
     "{\"enabled\":true,\"namespace\":\"${NAMESPACE_NAME}\",\"services\":[{\"portName\":\"proxysql-admin\",\"discoveryName\":\"proxysql\",\"clientAliases\":[{\"port\":6032,\"dnsName\":\"proxysql\"}]}]}"
 
-# ProxyServer service (2 replicas)
-create_service "proxyserver" "$TD_PROXYSERVER" 2 \
+# ProxyServer service (1 replica)
+create_service "proxyserver" "$TD_PROXYSERVER" 1 \
     "{\"enabled\":true,\"namespace\":\"${NAMESPACE_NAME}\",\"services\":[{\"portName\":\"proxyserver-http\",\"discoveryName\":\"proxyserver\",\"clientAliases\":[{\"port\":8079,\"dnsName\":\"proxyserver\"}]}]}"
 
 # DAM: PostgreSQL first (query-logging depends on it)
