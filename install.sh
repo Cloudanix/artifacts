@@ -39,11 +39,20 @@ cdx_curl() {
     local url="$1"; shift || true
     local sep="?"
     [[ "$url" == *"?"* ]] && sep="&"
-    local noproxy_flag=(--noproxy '*')
-    [[ "${CDX_USE_PROXY:-0}" == "1" ]] && noproxy_flag=()
-    curl -fsSL "${noproxy_flag[@]}" \
-        -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
-        "$@" "${url}${sep}cdxcb=${_CDX_RUN_ID}"
+    if [[ "${CDX_USE_PROXY:-0}" == "1" ]]; then
+        curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+            "$@" "${url}${sep}cdxcb=${_CDX_RUN_ID}"
+    else
+        # Bypass any caching HTTP proxy (common on AWS CloudShell) that can
+        # serve stale raw.githubusercontent.com content. We both pass
+        # --noproxy AND clear the proxy env vars for this call, since some
+        # curl builds honor the env vars over the flag.
+        env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+            -u all_proxy -u ALL_PROXY \
+            curl -fsSL --noproxy '*' \
+            -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+            "$@" "${url}${sep}cdxcb=${_CDX_RUN_ID}"
+    fi
 }
 
 # Colors
