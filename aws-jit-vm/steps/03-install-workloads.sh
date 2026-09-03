@@ -325,14 +325,21 @@ create_efs() {
         --throughput-mode bursting --encrypted \
         --tags "Key=Name,Value=${PROJECT_NAME}-efs" $(cdx_tags_kv) \
         --query 'FileSystemId' --output text)
-    info "Waiting for EFS..."
-    for _i in $(seq 1 20); do
-        local _state
+    # Wait until fully 'available'. Creating a mount target against a still
+    # 'creating' EFS fails with IncorrectFileSystemLifeCycleState. Diagnostics
+    # go to stderr so stdout stays clean (it carries the EFS id).
+    info "Waiting for EFS..." >&2
+    local _state=""
+    for _i in $(seq 1 60); do
         _state=$(aws efs describe-file-systems --file-system-id "$_id" \
-            --query 'FileSystems[0].LifeCycleState' --output text)
+            --query 'FileSystems[0].LifeCycleState' --output text 2>/dev/null || echo "")
         [[ "$_state" == "available" ]] && break
         sleep 5
     done
+    if [[ "$_state" != "available" ]]; then
+        error "EFS $_id did not become available (last state: ${_state:-unknown})" >&2
+        return 1
+    fi
     echo "$_id"
 }
 
@@ -370,12 +377,32 @@ if [[ -z "$EFS_ID" ]]; then
     ok "EFS created: $EFS_ID"
 fi
 
+# Ensure EFS is 'available' before creating mount targets (covers reuse path too).
+_efs_state=""
+for _i in $(seq 1 60); do
+    _efs_state=$(aws efs describe-file-systems --file-system-id "$EFS_ID" \
+        --query 'FileSystems[0].LifeCycleState' --output text 2>/dev/null || echo "")
+    [[ "$_efs_state" == "available" ]] && break
+    sleep 5
+done
+if [[ "$_efs_state" != "available" ]]; then
+    error "EFS $EFS_ID not available (state: ${_efs_state:-unknown})"; exit 1
+fi
+
 for SUB in "$PRIV_SUB_1" "$PRIV_SUB_2"; do
     EXISTING_MT=$(aws efs describe-mount-targets --file-system-id "$EFS_ID" \
         --query "MountTargets[?SubnetId=='${SUB}'].MountTargetId | [0]" --output text 2>/dev/null)
     if [[ -z "$EXISTING_MT" || "$EXISTING_MT" == "None" ]]; then
-        aws efs create-mount-target --file-system-id "$EFS_ID" --subnet-id "$SUB" \
-            --security-groups "$ECS_SG" > /dev/null
+        for _mt_try in 1 2 3 4 5; do
+            if aws efs create-mount-target --file-system-id "$EFS_ID" --subnet-id "$SUB" \
+                --security-groups "$ECS_SG" > /dev/null 2>&1; then
+                break
+            fi
+            EXISTING_MT=$(aws efs describe-mount-targets --file-system-id "$EFS_ID" \
+                --query "MountTargets[?SubnetId=='${SUB}'].MountTargetId | [0]" --output text 2>/dev/null)
+            [[ -n "$EXISTING_MT" && "$EXISTING_MT" != "None" ]] && break
+            sleep 5
+        done
     fi
 done
 info "Waiting for mount targets to become available..."
