@@ -57,6 +57,18 @@ info "VPC: $VPC_ID ($VPC_CIDR) | Private Subnets: $PRIV_SUB_1, $PRIV_SUB_2"
 info "Image source mode: ${CDX_ECR_MODE:-pull-through} | tag: $IMAGE_TAG"
 
 # =============================================================================
+# VPC DNS SETTINGS
+# =============================================================================
+# EFS mounts resolve fs-xxx.efs.<region>.amazonaws.com, which requires the VPC
+# to have BOTH DNS support and DNS hostnames enabled. On a customer-provided
+# existing VPC these are often off, causing ECS tasks to fail with:
+#   "Failed to resolve <fs-id>.efs.<region>.amazonaws.com"
+step "VPC DNS Settings"
+aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-support '{"Value":true}' 2>/dev/null || true
+aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-hostnames '{"Value":true}' 2>/dev/null || true
+ok "DNS hostnames + support enabled on $VPC_ID"
+
+# =============================================================================
 # ECR PULL-THROUGH CACHE (default image sourcing)
 # =============================================================================
 if [[ "${CDX_ECR_MODE:-pull-through}" != "sync" ]]; then
