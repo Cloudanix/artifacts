@@ -23,6 +23,29 @@ CDX_REPO_REF="${CDX_REPO_REF:-Divyansh-master-script}"
 REPO_BASE="${CDX_REPO_BASE:-https://raw.githubusercontent.com/Cloudanix/artifacts/${CDX_REPO_REF}}"
 INSTALL_DIR="${CDX_INSTALL_DIR:-$HOME/.cdx-jit}"
 
+# =============================================================================
+# DOWNLOAD HELPER
+# =============================================================================
+# Some environments (e.g. AWS CloudShell) sit behind a caching HTTP proxy that
+# can serve STALE copies of raw.githubusercontent.com files. That makes freshly
+# pushed changes appear to "not take effect". We defeat this by:
+#   - bypassing the proxy for GitHub hosts (--noproxy '*')
+#   - sending no-cache headers
+#   - appending a per-run cache-busting query string
+# Set CDX_USE_PROXY=1 to opt back into the proxy if ever needed.
+_CDX_RUN_ID="$(date +%s)-$$"
+cdx_curl() {
+    # usage: cdx_curl <url> [extra curl args...]
+    local url="$1"; shift || true
+    local sep="?"
+    [[ "$url" == *"?"* ]] && sep="&"
+    local noproxy_flag=(--noproxy '*')
+    [[ "${CDX_USE_PROXY:-0}" == "1" ]] && noproxy_flag=()
+    curl -fsSL "${noproxy_flag[@]}" \
+        -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+        "$@" "${url}${sep}cdxcb=${_CDX_RUN_ID}"
+}
+
 # Colors
 if [[ -t 1 ]] && [[ "${TERM:-dumb}" != "dumb" ]]; then
     R="\033[0m" B="\033[1m" C="\033[36m" G="\033[32m" Y="\033[33m" RD="\033[31m"
@@ -127,20 +150,20 @@ mkdir -p "$TARGET_DIR/steps"
 
 # Download shared library
 mkdir -p "${INSTALL_DIR}/lib"
-curl -fsSL "${REPO_BASE}/lib/common.sh" -o "${INSTALL_DIR}/lib/common.sh"
+cdx_curl "${REPO_BASE}/lib/common.sh" -o "${INSTALL_DIR}/lib/common.sh"
 chmod +x "${INSTALL_DIR}/lib/common.sh"
 echo -e "  ${G}✓${R} lib/common.sh"
 
 # Download config and setup
-curl -fsSL "${REPO_BASE}/${SELECTED}/config.sh" -o "${TARGET_DIR}/config.sh"
-curl -fsSL "${REPO_BASE}/${SELECTED}/setup.sh" -o "${TARGET_DIR}/setup.sh"
+cdx_curl "${REPO_BASE}/${SELECTED}/config.sh" -o "${TARGET_DIR}/config.sh"
+cdx_curl "${REPO_BASE}/${SELECTED}/setup.sh" -o "${TARGET_DIR}/setup.sh"
 chmod +x "${TARGET_DIR}/setup.sh"
 echo -e "  ${G}✓${R} ${SELECTED}/config.sh"
 echo -e "  ${G}✓${R} ${SELECTED}/setup.sh"
 
 # Download cleanup script if present (optional)
 mkdir -p "${TARGET_DIR}/cleanup"
-if curl -fsSL "${REPO_BASE}/${SELECTED}/cleanup/cleanup.sh" -o "${TARGET_DIR}/cleanup/cleanup.sh" 2>/dev/null; then
+if cdx_curl "${REPO_BASE}/${SELECTED}/cleanup/cleanup.sh" -o "${TARGET_DIR}/cleanup/cleanup.sh" 2>/dev/null; then
     chmod +x "${TARGET_DIR}/cleanup/cleanup.sh"
     echo -e "  ${G}✓${R} ${SELECTED}/cleanup/cleanup.sh"
 else
@@ -149,12 +172,12 @@ fi
 
 # Download step scripts by listing from a manifest
 # We fetch the steps manifest (one filename per line)
-STEPS_MANIFEST=$(curl -fsSL "${REPO_BASE}/${SELECTED}/steps/MANIFEST" 2>/dev/null || echo "")
+STEPS_MANIFEST=$(cdx_curl "${REPO_BASE}/${SELECTED}/steps/MANIFEST" 2>/dev/null || echo "")
 
 if [[ -n "$STEPS_MANIFEST" ]]; then
     while IFS= read -r step_file; do
         [[ -z "$step_file" ]] && continue
-        curl -fsSL "${REPO_BASE}/${SELECTED}/steps/${step_file}" -o "${TARGET_DIR}/steps/${step_file}"
+        cdx_curl "${REPO_BASE}/${SELECTED}/steps/${step_file}" -o "${TARGET_DIR}/steps/${step_file}"
         chmod +x "${TARGET_DIR}/steps/${step_file}"
         echo -e "  ${G}✓${R} steps/${step_file}"
     done <<< "$STEPS_MANIFEST"
@@ -162,8 +185,8 @@ else
     # Fallback: try known step patterns
     echo -e "  ${Y}!${R} No MANIFEST found — downloading step scripts individually..."
     for i in $(seq -w 1 15); do
-        for script in $(curl -fsSL "${REPO_BASE}/${SELECTED}/steps/" 2>/dev/null | grep -oE "${i}[^\"]*\.sh" | head -5); do
-            curl -fsSL "${REPO_BASE}/${SELECTED}/steps/${script}" -o "${TARGET_DIR}/steps/${script}" 2>/dev/null && \
+        for script in $(cdx_curl "${REPO_BASE}/${SELECTED}/steps/" 2>/dev/null | grep -oE "${i}[^\"]*\.sh" | head -5); do
+            cdx_curl "${REPO_BASE}/${SELECTED}/steps/${script}" -o "${TARGET_DIR}/steps/${script}" 2>/dev/null && \
                 chmod +x "${TARGET_DIR}/steps/${script}" && \
                 echo -e "  ${G}✓${R} steps/${script}" || true
         done
