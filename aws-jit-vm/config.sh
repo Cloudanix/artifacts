@@ -22,11 +22,22 @@ SCOPE_MODE_LABELS=(
 # STEPS PER SCOPE MODE
 # =============================================================================
 
+# Note: 02-sync-ecr is intentionally NOT part of any default flow. Images are
+# consumed via an ECR pull-through cache by default. The docker sync step is
+# only prepended when the operator passes the hidden --sync-ecr flag (handled
+# in setup.sh).
 declare -A STEPS_FOR_MODE
-STEPS_FOR_MODE["new-vpc"]="01-create-permission-set 02-sync-ecr 03-install-workloads 04-setup-vpc-peering 05-accept-peering 06-store-ssh-key"
-STEPS_FOR_MODE["existing-vpc"]="01-create-permission-set 02-sync-ecr 03-install-workloads-existing-vpc 06-store-ssh-key"
+STEPS_FOR_MODE["new-vpc"]="01-create-permission-set 03-install-workloads 04-setup-vpc-peering 05-accept-peering 06-store-ssh-key"
+STEPS_FOR_MODE["existing-vpc"]="01-create-permission-set 03-install-workloads-existing-vpc 06-store-ssh-key"
 STEPS_FOR_MODE["onboard-peered"]="07-onboard-peered 06-store-ssh-key"
 STEPS_FOR_MODE["onboard-new-account"]="08-onboard-peering 05-accept-peering 06-store-ssh-key"
+
+# Scope modes that install ECS workloads (need image sourcing). Used by setup.sh.
+SYNC_ELIGIBLE_MODES="new-vpc existing-vpc"
+# The sync step to prepend for this product when --sync-ecr is passed.
+SYNC_STEP_ID="02-sync-ecr"
+# Pinned default image tag for VM images (no per-service IMAGE_TAG prompt).
+CDX_VM_IMAGE_TAG="v0.3.31"
 
 # =============================================================================
 # ACCOUNT CONTEXT PER STEP

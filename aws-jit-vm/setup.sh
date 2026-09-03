@@ -26,10 +26,30 @@ source "$SCRIPT_DIR/config.sh"
 STATE_FILE="$SCRIPT_DIR/.state.json"
 
 # =============================================================================
+# ARGUMENT PARSING
+# =============================================================================
+# Supported (customer-facing): --cleanup, --share
+# Hidden (internal/ops):        --sync-ecr
+#   --sync-ecr switches image sourcing from the default ECR pull-through cache
+#   to the legacy docker pull/tag/push sync. Not shown in help or the menu.
+# =============================================================================
+
+MODE_ARG=""
+CDX_ECR_MODE="pull-through"   # default: silent pull-through cache
+for _arg in "$@"; do
+    case "$_arg" in
+        --sync-ecr) CDX_ECR_MODE="sync" ;;
+        --cleanup|--share) MODE_ARG="$_arg" ;;
+        *) ;;
+    esac
+done
+export CDX_ECR_MODE
+
+# =============================================================================
 # CLEANUP MODE
 # =============================================================================
 
-if [[ "${1:-}" == "--cleanup" ]]; then
+if [[ "$MODE_ARG" == "--cleanup" ]]; then
     echo ""
     echo -e "${_CLR_BOLD}=== Cleanup: $SETUP_DISPLAY_NAME ===${_CLR_RESET}"
     echo ""
@@ -76,7 +96,7 @@ fi
 # SHARE MODE — print the infra details Cloudanix needs (no secrets)
 # =============================================================================
 
-if [[ "${1:-}" == "--share" ]]; then
+if [[ "$MODE_ARG" == "--share" ]]; then
     cdx_share_summary "$STATE_FILE" "$SETUP_TYPE"
     exit $?
 fi
@@ -168,6 +188,37 @@ info "Scope mode: $SELECTED_SCOPE_MODE"
 
 STEPS_STR="${STEPS_FOR_MODE[$SELECTED_SCOPE_MODE]}"
 ALL_STEPS=($STEPS_STR)
+
+# Is this scope one that installs ECS workloads (and thus needs images)?
+_MODE_IS_SYNC_ELIGIBLE=false
+for _m in ${SYNC_ELIGIBLE_MODES:-}; do
+    [[ "$_m" == "$SELECTED_SCOPE_MODE" ]] && _MODE_IS_SYNC_ELIGIBLE=true && break
+done
+
+# In --sync-ecr mode, insert the (hidden) docker sync step just after the
+# permission-set step so images land in the customer's private ECR before the
+# workload install, while preserving account ordering.
+if [[ "$CDX_ECR_MODE" == "sync" && "$_MODE_IS_SYNC_ELIGIBLE" == true && -n "${SYNC_STEP_ID:-}" ]]; then
+    if [[ " ${ALL_STEPS[*]} " != *" ${SYNC_STEP_ID} "* ]]; then
+        _REBUILT=()
+        _INSERTED=false
+        for _s in "${ALL_STEPS[@]}"; do
+            _REBUILT+=("$_s")
+            if [[ "$_s" == "01-create-permission-set" ]]; then
+                _REBUILT+=("$SYNC_STEP_ID")
+                _INSERTED=true
+            fi
+        done
+        if [[ "$_INSERTED" == false ]]; then
+            _REBUILT=("$SYNC_STEP_ID" "${ALL_STEPS[@]}")
+        fi
+        ALL_STEPS=("${_REBUILT[@]}")
+    fi
+    info "ECR mode: docker sync (--sync-ecr) — images will be pushed to your private ECR"
+else
+    info "ECR mode: pull-through cache (default)"
+fi
+
 TOTAL_STEPS=${#ALL_STEPS[@]}
 
 # =============================================================================

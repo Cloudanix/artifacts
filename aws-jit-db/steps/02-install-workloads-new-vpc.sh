@@ -59,6 +59,14 @@ AZ_2=$(aws ec2 describe-availability-zones --region "$AWS_REGION" \
 ROLE_NAME="${PROJECT_NAME}-ECSRole"
 ECR_PREFIX="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
+# Resolve container image URIs for each service, honoring the ECR sourcing mode
+# (pull-through cache by default, private synced copy when --sync-ecr was used).
+IMG_PROXYSERVER=$(cdx_image_uri "proxy-server" "$IMAGE_TAG")
+IMG_PROXYSQL=$(cdx_image_uri "proxy-sql" "$IMAGE_TAG")
+IMG_QUERY_LOGGING=$(cdx_image_uri "query-logging" "$IMAGE_TAG")
+IMG_DAM_SERVER=$(cdx_image_uri "dam-server" "$IMAGE_TAG")
+IMG_POSTGRESQL=$(cdx_image_uri "postgresql" "$IMAGE_TAG")
+
 # Log groups (per service)
 LOG_GROUP_PROXYSERVER="/ecs/${PROJECT_NAME}/proxyserver"
 LOG_GROUP_PROXYSQL="/ecs/${PROJECT_NAME}/proxysql"
@@ -67,12 +75,24 @@ LOG_GROUP_DAM_SERVER="/ecs/${PROJECT_NAME}/dam-server"
 LOG_GROUP_POSTGRESQL="/ecs/${PROJECT_NAME}/postgresql"
 
 info "Account: $ACCOUNT_ID | Region: $AWS_REGION | Project: $PROJECT_NAME"
+info "Image source mode: ${CDX_ECR_MODE:-pull-through}"
 
 # =============================================================================
 # ECS SERVICE-LINKED ROLE
 # =============================================================================
 
 aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com 2>/dev/null || true
+
+# =============================================================================
+# ECR PULL-THROUGH CACHE (default image sourcing)
+# =============================================================================
+# In the default (non-sync) flow, images are served to ECS via a pull-through
+# cache rule that lazily mirrors our public ECR into this account's private
+# registry on first pull. Create it up front so the first task launch succeeds.
+if [[ "${CDX_ECR_MODE:-pull-through}" != "sync" ]]; then
+    step "ECR Pull-Through Cache"
+    cdx_ensure_pull_through_cache
+fi
 
 # =============================================================================
 # VPC
@@ -269,6 +289,13 @@ if ! aws iam get-policy --policy-arn "$LOGS_POLICY_ARN" > /dev/null 2>&1; then
         --query 'Policy.Arn' --output text)
 fi
 aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$LOGS_POLICY_ARN"
+
+# ECR pull-through cache permissions (default image sourcing). Lets the task
+# execution role import upstream images and auto-create cached repos on first
+# pull. Harmless in sync mode, but only needed for pull-through.
+if [[ "${CDX_ECR_MODE:-pull-through}" != "sync" ]]; then
+    cdx_attach_pull_through_iam "$ROLE_NAME"
+fi
 
 ok "All IAM policies attached to $ROLE_NAME"
 
@@ -473,7 +500,7 @@ VOLUME_CONFIG=$(jq -n \
 # ---- ProxyServer Task Definition ----
 PROXYSERVER_TD=$(jq -n \
     --arg family "proxyserver-task" \
-    --arg image "${ECR_PREFIX}/cloudanix/ecr-aws-jit-proxy-server:${IMAGE_TAG}" \
+    --arg image "$IMG_PROXYSERVER" \
     --arg role "$ROLE_ARN" \
     --arg region "$AWS_REGION" \
     --arg lg "$LOG_GROUP_PROXYSERVER" \
@@ -521,7 +548,7 @@ ok "Task def: proxyserver-task"
 # ---- ProxySQL Task Definition ----
 PROXYSQL_TD=$(jq -n \
     --arg family "proxysql" \
-    --arg image "${ECR_PREFIX}/cloudanix/ecr-aws-jit-proxy-sql:${IMAGE_TAG}" \
+    --arg image "$IMG_PROXYSQL" \
     --arg role "$ROLE_ARN" \
     --arg region "$AWS_REGION" \
     --arg lg "$LOG_GROUP_PROXYSQL" \
@@ -550,7 +577,7 @@ ok "Task def: proxysql"
 # ---- Query Logging Task Definition ----
 QUERY_LOGGING_TD=$(jq -n \
     --arg family "query-logging-task" \
-    --arg image "${ECR_PREFIX}/cloudanix/ecr-aws-jit-query-logging:${IMAGE_TAG}" \
+    --arg image "$IMG_QUERY_LOGGING" \
     --arg role "$ROLE_ARN" \
     --arg region "$AWS_REGION" \
     --arg lg "$LOG_GROUP_QUERY_LOGGING" \
@@ -602,7 +629,7 @@ if [[ "$ENABLE_DAM" == "true" ]]; then
     # DAM Server
     DAM_SERVER_TD=$(jq -n \
         --arg family "dam-server-task" \
-        --arg image "${ECR_PREFIX}/cloudanix/ecr-aws-jit-dam-server:${IMAGE_TAG}" \
+        --arg image "$IMG_DAM_SERVER" \
         --arg role "$ROLE_ARN" \
         --arg region "$AWS_REGION" \
         --arg lg "$LOG_GROUP_DAM_SERVER" \
@@ -644,7 +671,7 @@ if [[ "$ENABLE_DAM" == "true" ]]; then
     # PostgreSQL
     POSTGRESQL_TD=$(jq -n \
         --arg family "postgresql-task" \
-        --arg image "${ECR_PREFIX}/cloudanix/ecr-aws-jit-postgresql:${IMAGE_TAG}" \
+        --arg image "$IMG_POSTGRESQL" \
         --arg role "$ROLE_ARN" \
         --arg region "$AWS_REGION" \
         --arg lg "$LOG_GROUP_POSTGRESQL" \

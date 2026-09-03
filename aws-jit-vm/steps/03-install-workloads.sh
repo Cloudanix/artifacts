@@ -45,8 +45,23 @@ LOG_GROUP="/ecs/${PROJECT_NAME}"
 NAMESPACE="${PROJECT_NAME}-local"
 ECR_PREFIX="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
+# Pinned VM image tag + per-service image URIs (honors ECR sourcing mode).
+IMAGE_TAG="${IMAGE_TAG:-${CDX_VM_IMAGE_TAG:-v0.3.31}}"
+IMG_SSHPIPER=$(cdx_image_uri "vm-sshpiper" "$IMAGE_TAG")
+IMG_VM_PROXYSERVER=$(cdx_image_uri "vm-proxyserver" "$IMAGE_TAG")
+IMG_VM_LOGGING=$(cdx_image_uri "vm-logging" "$IMAGE_TAG")
+
 info "Account: $ACCOUNT_ID | Region: $AWS_REGION | Project: $PROJECT_NAME"
 info "VPC CIDR: $VPC_CIDR | AZs: $AZ_1, $AZ_2"
+info "Image source mode: ${CDX_ECR_MODE:-pull-through} | tag: $IMAGE_TAG"
+
+# =============================================================================
+# ECR PULL-THROUGH CACHE (default image sourcing)
+# =============================================================================
+if [[ "${CDX_ECR_MODE:-pull-through}" != "sync" ]]; then
+    step "ECR Pull-Through Cache"
+    cdx_ensure_pull_through_cache
+fi
 
 # =============================================================================
 # VPC
@@ -232,6 +247,11 @@ else
 fi
 aws iam attach-role-policy --role-name "$ROLE_NAME" \
     --policy-arn "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+
+# ECR pull-through cache permissions (default image sourcing).
+if [[ "${CDX_ECR_MODE:-pull-through}" != "sync" ]]; then
+    cdx_attach_pull_through_iam "$ROLE_NAME"
+fi
 
 cat > /tmp/vm-task-policy.json << EOF
 {
@@ -459,7 +479,7 @@ cat > /tmp/td-sshpiper.json << EOF
     "cpu": "256", "memory": "512", "executionRoleArn": "${ROLE_ARN}", "taskRoleArn": "${ROLE_ARN}",
     "volumes": ${EFS_VOLUMES},
     "containerDefinitions": [{
-        "name": "sshpiper", "image": "${ECR_PREFIX}/cloudanix/ecr-aws-jit-vm-sshpiper:latest", "essential": true,
+        "name": "sshpiper", "image": "${IMG_SSHPIPER}", "essential": true,
         "portMappings": [{"name":"sshpiper","containerPort":2222,"protocol":"tcp"}],
         "mountPoints": [
             {"sourceVolume":"sshpiper-workingdir","containerPath":"/tmp/sshpiper/workingdir","readOnly":false},
@@ -480,7 +500,7 @@ cat > /tmp/td-proxyserver.json << EOF
     "cpu": "512", "memory": "1024", "executionRoleArn": "${ROLE_ARN}", "taskRoleArn": "${ROLE_ARN}",
     "volumes": ${EFS_VOLUMES},
     "containerDefinitions": [{
-        "name": "vmproxyserver", "image": "${ECR_PREFIX}/cloudanix/ecr-aws-jit-vm-proxyserver:latest", "essential": true,
+        "name": "vmproxyserver", "image": "${IMG_VM_PROXYSERVER}", "essential": true,
         "portMappings": [{"name":"vmproxyserver","containerPort":8079,"protocol":"tcp"}],
         "mountPoints": [
             {"sourceVolume":"sshpiper-workingdir","containerPath":"/tmp/sshpiper/workingdir","readOnly":false},
@@ -520,7 +540,7 @@ cat > /tmp/td-logging.json << EOF
     "cpu": "256", "memory": "512", "executionRoleArn": "${ROLE_ARN}", "taskRoleArn": "${ROLE_ARN}",
     "volumes": ${EFS_VOLUMES},
     "containerDefinitions": [{
-        "name": "vmcommandlogging", "image": "${ECR_PREFIX}/cloudanix/ecr-aws-jit-vm-logging:latest", "essential": true,
+        "name": "vmcommandlogging", "image": "${IMG_VM_LOGGING}", "essential": true,
         "mountPoints": [
             {"sourceVolume":"sshpiper-workingdir","containerPath":"/tmp/sshpiper/workingdir","readOnly":false},
             {"sourceVolume":"sshpiper-recordings","containerPath":"/tmp/recordings","readOnly":false}

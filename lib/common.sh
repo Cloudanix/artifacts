@@ -914,6 +914,144 @@ check_prerequisites() {
 }
 
 # =============================================================================
+# ECR IMAGE SOURCING (pull-through cache default + hidden docker sync)
+# =============================================================================
+# Cloudanix distributes container images from a PUBLIC ECR registry. Customers
+# consume them one of two ways:
+#
+#   1. Pull-through cache (DEFAULT, silent) — a PTC rule in the customer's own
+#      private registry lazily caches images from our public registry on first
+#      pull. No Docker, no manual sync. Image URIs carry the PTC prefix:
+#         <acct>.dkr.ecr.<region>.amazonaws.com/<PTC_PREFIX>/<PUB_ALIAS>/cloudanix/<name>:<tag>
+#
+#   2. Legacy docker sync (HIDDEN, --sync-ecr) — the old pull/tag/push flow,
+#      but now sourcing FROM the public registry and pushing INTO the customer's
+#      private ECR under the original repo names (cloudanix/ecr-aws-jit-<name>).
+#      Image URIs then point at the synced private copy:
+#         <acct>.dkr.ecr.<region>.amazonaws.com/cloudanix/ecr-aws-jit-<name>:<tag>
+# =============================================================================
+
+# Public ECR registry that hosts the distributable images.
+CDX_PUBLIC_ECR_ALIAS="${CDX_PUBLIC_ECR_ALIAS:-e7l2l5s1}"
+CDX_PUBLIC_ECR_HOST="${CDX_PUBLIC_ECR_HOST:-public.ecr.aws}"
+# Repository prefix inside the customer's private registry used by the
+# pull-through cache rule. Cached repos live under this namespace.
+CDX_PTC_PREFIX="${CDX_PTC_PREFIX:-cdx-ecr}"
+
+# cdx_public_repo SHORT_NAME
+#   Maps a short image name (e.g. "proxy-server") to its public repo path
+#   (cloudanix/aws-jit-proxy-server). VM images already carry the vm- prefix
+#   in their short name (e.g. "vm-sshpiper").
+cdx_public_repo() {
+    echo "cloudanix/aws-jit-$1"
+}
+
+# cdx_private_repo SHORT_NAME
+#   Maps a short image name to the ORIGINAL private repo path used as the
+#   docker-sync target (cloudanix/ecr-aws-jit-proxy-server).
+cdx_private_repo() {
+    echo "cloudanix/ecr-aws-jit-$1"
+}
+
+# cdx_image_uri SHORT_NAME TAG
+#   Returns the fully-qualified image URI for the current account/region for a
+#   given short image name and tag, honoring the sourcing mode.
+#   Requires: AWS account resolvable via STS, AWS_REGION set.
+#   Mode is selected by CDX_ECR_MODE:
+#     "sync"         -> private synced copy  (cloudanix/ecr-aws-jit-<name>)
+#     "pull-through" -> PTC path             (default)
+cdx_image_uri() {
+    local short="$1" tag="$2"
+    local account region prefix
+    account=$(aws sts get-caller-identity --query "Account" --output text)
+    region="${AWS_REGION:?AWS_REGION must be set}"
+    prefix="${account}.dkr.ecr.${region}.amazonaws.com"
+
+    if [[ "${CDX_ECR_MODE:-pull-through}" == "sync" ]]; then
+        echo "${prefix}/$(cdx_private_repo "$short"):${tag}"
+    else
+        echo "${prefix}/${CDX_PTC_PREFIX}/${CDX_PUBLIC_ECR_ALIAS}/$(cdx_public_repo "$short"):${tag}"
+    fi
+}
+
+# cdx_ensure_pull_through_cache
+#   Idempotently creates the pull-through cache rule (CDX_PTC_PREFIX -> public
+#   ECR) in the current account/region. Safe to call repeatedly.
+#   Requires: AWS_REGION set.
+cdx_ensure_pull_through_cache() {
+    local region="${AWS_REGION:?AWS_REGION must be set}"
+
+    # Already present?
+    if aws ecr describe-pull-through-cache-rules --region "$region" \
+        --ecr-repository-prefixes "$CDX_PTC_PREFIX" > /dev/null 2>&1; then
+        ok "Pull-through cache rule exists: ${CDX_PTC_PREFIX} -> ${CDX_PUBLIC_ECR_HOST}"
+        return 0
+    fi
+
+    if aws ecr create-pull-through-cache-rule --region "$region" \
+        --ecr-repository-prefix "$CDX_PTC_PREFIX" \
+        --upstream-registry-url "$CDX_PUBLIC_ECR_HOST" > /dev/null 2>&1; then
+        ok "Pull-through cache rule created: ${CDX_PTC_PREFIX} -> ${CDX_PUBLIC_ECR_HOST}"
+    else
+        # Treat an "already exists" race as success; otherwise surface the error.
+        if aws ecr describe-pull-through-cache-rules --region "$region" \
+            --ecr-repository-prefixes "$CDX_PTC_PREFIX" > /dev/null 2>&1; then
+            ok "Pull-through cache rule exists: ${CDX_PTC_PREFIX} -> ${CDX_PUBLIC_ECR_HOST}"
+        else
+            error "Failed to create pull-through cache rule for prefix ${CDX_PTC_PREFIX}"
+            return 1
+        fi
+    fi
+}
+
+# cdx_pull_through_iam_policy_doc
+#   Emits the IAM policy JSON granting the permissions ECS needs to pull
+#   through the cache and auto-create the cached repositories on first pull.
+cdx_pull_through_iam_policy_doc() {
+    cat <<'EOF'
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "CdxEcrPullThroughCache",
+            "Effect": "Allow",
+            "Action": [
+                "ecr:GetAuthorizationToken",
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:BatchGetImage",
+                "ecr:BatchImportUpstreamImage",
+                "ecr:CreateRepository",
+                "ecr:TagResource"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+EOF
+}
+
+# cdx_attach_pull_through_iam ROLE_NAME
+#   Idempotently creates + attaches the pull-through cache IAM policy to the
+#   given role so ECS task execution can import upstream images on first pull.
+cdx_attach_pull_through_iam() {
+    local role_name="$1"
+    local account policy_name policy_arn
+    account=$(aws sts get-caller-identity --query "Account" --output text)
+    policy_name="CdxEcrPullThroughCache"
+    policy_arn="arn:aws:iam::${account}:policy/${policy_name}"
+
+    if ! aws iam get-policy --policy-arn "$policy_arn" > /dev/null 2>&1; then
+        aws iam create-policy --policy-name "$policy_name" \
+            --description "Allows ECS to pull images via the Cloudanix ECR pull-through cache" \
+            --policy-document "$(cdx_pull_through_iam_policy_doc)" > /dev/null
+        ok "IAM policy created: $policy_name"
+    fi
+    aws iam attach-role-policy --role-name "$role_name" --policy-arn "$policy_arn" 2>/dev/null || true
+    ok "Pull-through cache IAM attached to $role_name"
+}
+
+# =============================================================================
 # REQUIRE ENVIRONMENT VARIABLES
 # =============================================================================
 
@@ -951,3 +1089,5 @@ export -f validate_arn validate_region validate_alphanumeric_dash
 export -f validate_semver_or_latest validate_boolean validate_nonempty validate
 export -f handle_error show_progress mask_sensitive parse_step_output
 export -f show_account_switch_banner check_prerequisites require_env
+export -f cdx_public_repo cdx_private_repo cdx_image_uri
+export -f cdx_ensure_pull_through_cache cdx_pull_through_iam_policy_doc cdx_attach_pull_through_iam

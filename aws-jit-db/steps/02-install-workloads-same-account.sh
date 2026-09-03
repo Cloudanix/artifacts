@@ -57,6 +57,13 @@ ECR_PREFIX="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 ECS_CLUSTER_NAME="${PROJECT_NAME}-cluster-${SETUP_NUMBER}"
 NAMESPACE_NAME="proxysql-proxyserver-${SETUP_NUMBER}"
 
+# Resolve container image URIs per service, honoring the ECR sourcing mode.
+IMG_PROXYSERVER=$(cdx_image_uri "proxy-server" "$IMAGE_TAG")
+IMG_PROXYSQL=$(cdx_image_uri "proxy-sql" "$IMAGE_TAG")
+IMG_QUERY_LOGGING=$(cdx_image_uri "query-logging" "$IMAGE_TAG")
+IMG_DAM_SERVER=$(cdx_image_uri "dam-server" "$IMAGE_TAG")
+IMG_POSTGRESQL=$(cdx_image_uri "postgresql" "$IMAGE_TAG")
+
 # Suffixed log groups
 LOG_GROUP_PROXYSERVER="/ecs/${PROJECT_NAME}/proxyserver-${SETUP_NUMBER}"
 LOG_GROUP_PROXYSQL="/ecs/${PROJECT_NAME}/proxysql-${SETUP_NUMBER}"
@@ -75,9 +82,26 @@ info "Account: $ACCOUNT_ID | Region: $AWS_REGION | Project: $PROJECT_NAME"
 info "Setup #${SETUP_NUMBER} | Cluster: $ECS_CLUSTER_NAME | Namespace: $NAMESPACE_NAME"
 info "VPC: $VPC_ID | Subnets: $PRIVATE_SUBNET_1_ID, $PRIVATE_SUBNET_2_ID"
 
+info "Image source mode: ${CDX_ECR_MODE:-pull-through}"
+
 # EFS mount target DNS resolution requires VPC DNS hostnames + support
 aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-support '{"Value":true}' 2>/dev/null || true
 aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-hostnames '{"Value":true}' 2>/dev/null || true
+
+# =============================================================================
+# ECR PULL-THROUGH CACHE (default image sourcing)
+# =============================================================================
+# The role and base policies already exist from the first setup; ensure the
+# pull-through cache rule exists and the ECR import permissions are attached.
+if [[ "${CDX_ECR_MODE:-pull-through}" != "sync" ]]; then
+    step "ECR Pull-Through Cache"
+    cdx_ensure_pull_through_cache
+    if aws iam get-role --role-name "$ROLE_NAME" > /dev/null 2>&1; then
+        cdx_attach_pull_through_iam "$ROLE_NAME"
+    else
+        warn "Role $ROLE_NAME not found — skipping pull-through IAM attach (verify first setup ran)"
+    fi
+fi
 
 # =============================================================================
 # HELPER: EXTEND IAM POLICY
@@ -414,7 +438,7 @@ VOLUME_CONFIG=$(jq -n \
 # ---- ProxyServer Task Definition ----
 PROXYSERVER_TD=$(jq -n \
     --arg family "$TD_PROXYSERVER" \
-    --arg image "${ECR_PREFIX}/cloudanix/ecr-aws-jit-proxy-server:${IMAGE_TAG}" \
+    --arg image "$IMG_PROXYSERVER" \
     --arg role "$ROLE_ARN" \
     --arg region "$AWS_REGION" \
     --arg lg "$LOG_GROUP_PROXYSERVER" \
@@ -462,7 +486,7 @@ ok "Task def: $TD_PROXYSERVER"
 # ---- ProxySQL Task Definition ----
 PROXYSQL_TD=$(jq -n \
     --arg family "$TD_PROXYSQL" \
-    --arg image "${ECR_PREFIX}/cloudanix/ecr-aws-jit-proxy-sql:${IMAGE_TAG}" \
+    --arg image "$IMG_PROXYSQL" \
     --arg role "$ROLE_ARN" \
     --arg region "$AWS_REGION" \
     --arg lg "$LOG_GROUP_PROXYSQL" \
@@ -491,7 +515,7 @@ ok "Task def: $TD_PROXYSQL"
 # ---- Query Logging Task Definition ----
 QUERY_LOGGING_TD=$(jq -n \
     --arg family "$TD_QUERY_LOGGING" \
-    --arg image "${ECR_PREFIX}/cloudanix/ecr-aws-jit-query-logging:${IMAGE_TAG}" \
+    --arg image "$IMG_QUERY_LOGGING" \
     --arg role "$ROLE_ARN" \
     --arg region "$AWS_REGION" \
     --arg lg "$LOG_GROUP_QUERY_LOGGING" \
@@ -543,7 +567,7 @@ if [[ "$ENABLE_DAM" == "true" ]]; then
     # DAM Server
     DAM_SERVER_TD=$(jq -n \
         --arg family "$TD_DAM_SERVER" \
-        --arg image "${ECR_PREFIX}/cloudanix/ecr-aws-jit-dam-server:${IMAGE_TAG}" \
+        --arg image "$IMG_DAM_SERVER" \
         --arg role "$ROLE_ARN" \
         --arg region "$AWS_REGION" \
         --arg lg "$LOG_GROUP_DAM_SERVER" \
@@ -585,7 +609,7 @@ if [[ "$ENABLE_DAM" == "true" ]]; then
     # PostgreSQL
     POSTGRESQL_TD=$(jq -n \
         --arg family "$TD_POSTGRESQL" \
-        --arg image "${ECR_PREFIX}/cloudanix/ecr-aws-jit-postgresql:${IMAGE_TAG}" \
+        --arg image "$IMG_POSTGRESQL" \
         --arg role "$ROLE_ARN" \
         --arg region "$AWS_REGION" \
         --arg lg "$LOG_GROUP_POSTGRESQL" \
