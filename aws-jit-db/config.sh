@@ -27,12 +27,23 @@ SCOPE_MODE_LABELS=(
 # STEPS PER SCOPE MODE (ordered execution sequence)
 # =============================================================================
 
+# Note: 01-sync-ecr is intentionally NOT part of any default flow. Images are
+# consumed via an ECR pull-through cache by default. The docker sync step is
+# only prepended when the operator passes the hidden --sync-ecr flag (handled
+# in setup.sh).
 declare -A STEPS_FOR_MODE
-STEPS_FOR_MODE["new-vpc"]="01-sync-ecr 02-install-workloads-new-vpc 03-setup-vpc-peering 04-accept-peering 05-extend-role-permissions 06-extend-role-trust 07-update-assume-role 08-create-permission-set"
-STEPS_FOR_MODE["existing-vpc"]="01-sync-ecr 02-install-workloads-existing-vpc 05-extend-role-permissions 06-extend-role-trust 07-update-assume-role 08-create-permission-set"
-STEPS_FOR_MODE["same-account"]="01-sync-ecr 02-install-workloads-same-account 07-update-assume-role 08-create-permission-set"
+STEPS_FOR_MODE["new-vpc"]="02-install-workloads-new-vpc 03-setup-vpc-peering 04-accept-peering 05-extend-role-permissions 06-extend-role-trust 07-update-assume-role 08-create-permission-set"
+STEPS_FOR_MODE["existing-vpc"]="02-install-workloads-existing-vpc 05-extend-role-permissions 06-extend-role-trust 07-update-assume-role 08-create-permission-set"
+STEPS_FOR_MODE["same-account"]="02-install-workloads-same-account 07-update-assume-role 08-create-permission-set"
 STEPS_FOR_MODE["onboard-peered"]="09-onboard-rds-peered"
 STEPS_FOR_MODE["onboard-new-account"]="10-onboard-peering 04-accept-peering 05-extend-role-permissions 06-extend-role-trust 07-update-assume-role"
+
+# Scope modes that install ECS workloads (and therefore need image sourcing set
+# up: either a pull-through cache by default, or a prepended sync step with
+# --sync-ecr). Used by setup.sh.
+SYNC_ELIGIBLE_MODES="new-vpc existing-vpc same-account"
+# The sync step to prepend for this product when --sync-ecr is passed.
+SYNC_STEP_ID="01-sync-ecr"
 
 # =============================================================================
 # ACCOUNT CONTEXT PER STEP
@@ -106,15 +117,16 @@ CONFIG_FIELDS=(
     "SSO_INSTANCE_ARN|nonempty|__AUTO_SSO__|SSO Instance ARN|new-vpc,existing-vpc,same-account|false"
     "PROJECT_NAME|alphanumeric_dash|cdx-jit-db|Project Name|new-vpc,existing-vpc,same-account,onboard-new-account|false"
     "ECS_CLUSTER_NAME|alphanumeric_dash|cdx-jit-db-cluster|ECS Cluster Name|new-vpc,existing-vpc|false"
-    "IMAGE_TAG|semver_or_latest|latest|Image Tag|new-vpc,existing-vpc,same-account|false"
+    "IMAGE_TAG|semver_or_latest|v0.3.27|Image Tag (e.g. v0.3.27)|new-vpc,existing-vpc,same-account|false"
     "ENABLE_DAM|boolean|false|Enable Database Activity Monitoring (DAM)? (true/false)|new-vpc,existing-vpc,same-account|false"
     "VPC_CIDR|cidr|10.50.0.0/16|VPC CIDR Block|new-vpc|false"
     "VPC_ID|nonempty||Existing VPC ID|existing-vpc,same-account|false"
     "PRIVATE_SUBNET_1_ID|nonempty||Private Subnet 1 ID|existing-vpc,same-account|false"
     "PRIVATE_SUBNET_2_ID|nonempty||Private Subnet 2 ID|existing-vpc,same-account|false"
     "SETUP_NUMBER|nonempty|2|Setup Number (for multi-VPC in same account)|same-account|false"
+    "SETUP_PEERING|boolean|true|Set up VPC peering? (true/false — false = role + SG whitelist only)|onboard-new-account|false"
     "HUB_VPC_ID|nonempty|__AUTO_HUB_VPC__|JIT hub VPC ID (auto-detected — confirm or override)|onboard-new-account|false"
-    "HUB_VPC_CIDR|cidr|__AUTO_HUB_CIDR__|JIT hub VPC CIDR (auto-detected — the peered requester CIDR)|onboard-peered|false"
+    "HUB_VPC_CIDR|cidr|__AUTO_HUB_CIDR__|JIT hub VPC CIDR (auto-detected — the requester/hub CIDR)|onboard-peered,onboard-new-account|false"
     "BUCKET_NAME|nonempty|__AUTO_BUCKET__|S3 Bucket Name (for query logs)|new-vpc,existing-vpc,same-account|false"
     "SECRET_NAME|nonempty|CDX_SECRETS|Secrets Manager Secret Name|new-vpc,existing-vpc,same-account|false"
     "CDX_AUTH_TOKEN|nonempty||CDX Auth Token|new-vpc,existing-vpc,same-account|true"

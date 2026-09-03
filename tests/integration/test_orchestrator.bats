@@ -122,8 +122,12 @@ teardown() {
 
     steps="${STEPS_FOR_MODE["new-vpc"]}"
     [ -n "$steps" ]
-    # Should contain at least sync-ecr
-    [[ "$steps" == *"01-sync-ecr"* ]]
+    # Image sourcing now defaults to the ECR pull-through cache, so the docker
+    # sync step (01-sync-ecr) is NOT part of the default flow — it is only
+    # prepended by setup.sh when --sync-ecr is passed.
+    [[ "$steps" != *"01-sync-ecr"* ]]
+    # Should install workloads.
+    [[ "$steps" == *"02-install-workloads-new-vpc"* ]]
 }
 
 @test "config.sh defines account context for each step" {

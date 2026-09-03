@@ -50,6 +50,13 @@ export AWS_DEFAULT_REGION="$AWS_REGION"
 ROLE_NAME="${PROJECT_NAME}-ECSRole"
 ECR_PREFIX="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
+# Resolve container image URIs per service, honoring the ECR sourcing mode.
+IMG_PROXYSERVER=$(cdx_image_uri "proxy-server" "$IMAGE_TAG")
+IMG_PROXYSQL=$(cdx_image_uri "proxy-sql" "$IMAGE_TAG")
+IMG_QUERY_LOGGING=$(cdx_image_uri "query-logging" "$IMAGE_TAG")
+IMG_DAM_SERVER=$(cdx_image_uri "dam-server" "$IMAGE_TAG")
+IMG_POSTGRESQL=$(cdx_image_uri "postgresql" "$IMAGE_TAG")
+
 # Log groups (per service)
 LOG_GROUP_PROXYSERVER="/ecs/${PROJECT_NAME}/proxyserver"
 LOG_GROUP_PROXYSQL="/ecs/${PROJECT_NAME}/proxysql"
@@ -59,6 +66,15 @@ LOG_GROUP_POSTGRESQL="/ecs/${PROJECT_NAME}/postgresql"
 
 info "Account: $ACCOUNT_ID | Region: $AWS_REGION | Project: $PROJECT_NAME"
 info "VPC: $VPC_ID | Subnets: $PRIVATE_SUBNET_1_ID, $PRIVATE_SUBNET_2_ID"
+info "Image source mode: ${CDX_ECR_MODE:-pull-through}"
+
+# =============================================================================
+# ECR PULL-THROUGH CACHE (default image sourcing)
+# =============================================================================
+if [[ "${CDX_ECR_MODE:-pull-through}" != "sync" ]]; then
+    step "ECR Pull-Through Cache"
+    cdx_ensure_pull_through_cache
+fi
 
 # =============================================================================
 # ENABLE VPC DNS (required for EFS mount target DNS resolution)
@@ -142,6 +158,11 @@ if ! aws iam get-policy --policy-arn "$LOGS_POLICY_ARN" > /dev/null 2>&1; then
         --query 'Policy.Arn' --output text)
 fi
 aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$LOGS_POLICY_ARN"
+
+# ECR pull-through cache permissions (default image sourcing).
+if [[ "${CDX_ECR_MODE:-pull-through}" != "sync" ]]; then
+    cdx_attach_pull_through_iam "$ROLE_NAME"
+fi
 
 ok "All IAM policies attached to $ROLE_NAME"
 
@@ -373,7 +394,7 @@ VOLUME_CONFIG=$(jq -n \
 # ---- ProxyServer Task Definition ----
 PROXYSERVER_TD=$(jq -n \
     --arg family "proxyserver-task" \
-    --arg image "${ECR_PREFIX}/cloudanix/ecr-aws-jit-proxy-server:${IMAGE_TAG}" \
+    --arg image "$IMG_PROXYSERVER" \
     --arg role "$ROLE_ARN" \
     --arg region "$AWS_REGION" \
     --arg lg "$LOG_GROUP_PROXYSERVER" \
@@ -421,7 +442,7 @@ ok "Task def: proxyserver-task"
 # ---- ProxySQL Task Definition ----
 PROXYSQL_TD=$(jq -n \
     --arg family "proxysql" \
-    --arg image "${ECR_PREFIX}/cloudanix/ecr-aws-jit-proxy-sql:${IMAGE_TAG}" \
+    --arg image "$IMG_PROXYSQL" \
     --arg role "$ROLE_ARN" \
     --arg region "$AWS_REGION" \
     --arg lg "$LOG_GROUP_PROXYSQL" \
@@ -450,7 +471,7 @@ ok "Task def: proxysql"
 # ---- Query Logging Task Definition ----
 QUERY_LOGGING_TD=$(jq -n \
     --arg family "query-logging-task" \
-    --arg image "${ECR_PREFIX}/cloudanix/ecr-aws-jit-query-logging:${IMAGE_TAG}" \
+    --arg image "$IMG_QUERY_LOGGING" \
     --arg role "$ROLE_ARN" \
     --arg region "$AWS_REGION" \
     --arg lg "$LOG_GROUP_QUERY_LOGGING" \
@@ -502,7 +523,7 @@ if [[ "$ENABLE_DAM" == "true" ]]; then
     # DAM Server
     DAM_SERVER_TD=$(jq -n \
         --arg family "dam-server-task" \
-        --arg image "${ECR_PREFIX}/cloudanix/ecr-aws-jit-dam-server:${IMAGE_TAG}" \
+        --arg image "$IMG_DAM_SERVER" \
         --arg role "$ROLE_ARN" \
         --arg region "$AWS_REGION" \
         --arg lg "$LOG_GROUP_DAM_SERVER" \
@@ -544,7 +565,7 @@ if [[ "$ENABLE_DAM" == "true" ]]; then
     # PostgreSQL
     POSTGRESQL_TD=$(jq -n \
         --arg family "postgresql-task" \
-        --arg image "${ECR_PREFIX}/cloudanix/ecr-aws-jit-postgresql:${IMAGE_TAG}" \
+        --arg image "$IMG_POSTGRESQL" \
         --arg role "$ROLE_ARN" \
         --arg region "$AWS_REGION" \
         --arg lg "$LOG_GROUP_POSTGRESQL" \
@@ -610,8 +631,8 @@ create_service() {
 create_service "proxysql" "proxysql" 1 \
     '{"enabled":true,"namespace":"proxysql-proxyserver","services":[{"portName":"proxysql-admin","discoveryName":"proxysql","clientAliases":[{"port":6032,"dnsName":"proxysql"}]}]}'
 
-# ProxyServer service (2 replicas)
-create_service "proxyserver" "proxyserver-task" 2 \
+# ProxyServer service (1 replica)
+create_service "proxyserver" "proxyserver-task" 1 \
     '{"enabled":true,"namespace":"proxysql-proxyserver","services":[{"portName":"proxyserver-http","discoveryName":"proxyserver","clientAliases":[{"port":8079,"dnsName":"proxyserver"}]}]}'
 
 # DAM: PostgreSQL first (query-logging depends on it)

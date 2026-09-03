@@ -26,10 +26,38 @@ source "$SCRIPT_DIR/config.sh"
 STATE_FILE="$SCRIPT_DIR/.state.json"
 
 # =============================================================================
+# ARGUMENT PARSING
+# =============================================================================
+# Supported (customer-facing): --cleanup, --share
+# Hidden (internal/ops):        --sync-ecr
+#   --sync-ecr switches image sourcing from the default ECR pull-through cache
+#   to the legacy docker pull/tag/push sync (sourcing from public ECR, pushing
+#   into the customer's private ECR). It is deliberately NOT shown in help or
+#   the menu.
+# =============================================================================
+
+MODE_ARG=""
+CDX_ECR_MODE="pull-through"   # default: silent pull-through cache
+for _arg in "$@"; do
+    case "$_arg" in
+        --sync-ecr)
+            CDX_ECR_MODE="sync"
+            ;;
+        --cleanup|--share)
+            MODE_ARG="$_arg"
+            ;;
+        *)
+            # ignore unknown/positional args (kept for backward compatibility)
+            ;;
+    esac
+done
+export CDX_ECR_MODE
+
+# =============================================================================
 # CLEANUP MODE
 # =============================================================================
 
-if [[ "${1:-}" == "--cleanup" ]]; then
+if [[ "$MODE_ARG" == "--cleanup" ]]; then
     echo ""
     echo -e "${_CLR_BOLD}=== Cleanup: $SETUP_DISPLAY_NAME ===${_CLR_RESET}"
     echo ""
@@ -65,7 +93,7 @@ fi
 # SHARE MODE — print the infra details Cloudanix needs (no secrets)
 # =============================================================================
 
-if [[ "${1:-}" == "--share" ]]; then
+if [[ "$MODE_ARG" == "--share" ]]; then
     cdx_share_summary "$STATE_FILE" "$SETUP_TYPE"
     exit $?
 fi
@@ -157,6 +185,24 @@ info "Scope mode: $SELECTED_SCOPE_MODE"
 
 STEPS_STR="${STEPS_FOR_MODE[$SELECTED_SCOPE_MODE]}"
 ALL_STEPS=($STEPS_STR)
+
+# Is this scope one that installs ECS workloads (and thus needs images)?
+_MODE_IS_SYNC_ELIGIBLE=false
+for _m in ${SYNC_ELIGIBLE_MODES:-}; do
+    [[ "$_m" == "$SELECTED_SCOPE_MODE" ]] && _MODE_IS_SYNC_ELIGIBLE=true && break
+done
+
+# In --sync-ecr mode, prepend the (hidden) docker sync step so images land in
+# the customer's private ECR before workloads are installed.
+if [[ "$CDX_ECR_MODE" == "sync" && "$_MODE_IS_SYNC_ELIGIBLE" == true && -n "${SYNC_STEP_ID:-}" ]]; then
+    if [[ " ${ALL_STEPS[*]} " != *" ${SYNC_STEP_ID} "* ]]; then
+        ALL_STEPS=("$SYNC_STEP_ID" "${ALL_STEPS[@]}")
+    fi
+    info "ECR mode: docker sync (--sync-ecr) — images will be pushed to your private ECR"
+else
+    info "ECR mode: pull-through cache (default)"
+fi
+
 TOTAL_STEPS=${#ALL_STEPS[@]}
 
 # =============================================================================
@@ -321,6 +367,29 @@ if [[ "$RESUME_MODE" == true ]]; then
             done
         fi
     done
+fi
+
+# =============================================================================
+# OPTIONAL VPC PEERING (onboard-new-account)
+# =============================================================================
+# When the operator opts out of VPC peering (SETUP_PEERING=false), drop the
+# peering-creation step (10-onboard-peering). The acceptance step
+# (04-accept-peering) stays but runs in SG-whitelist-only mode. This lets a
+# customer that only needs role setup + SG whitelisting skip peering entirely.
+if [[ "$SELECTED_SCOPE_MODE" == "onboard-new-account" ]]; then
+    _setup_peering=$(get_config_value "$STATE_FILE" "SETUP_PEERING")
+    if [[ "$_setup_peering" == "false" ]]; then
+        info "VPC peering disabled — skipping peering creation (role + SG whitelist only)"
+        _filtered=()
+        for _s in "${ALL_STEPS[@]}"; do
+            [[ "$_s" == "10-onboard-peering" ]] && continue
+            _filtered+=("$_s")
+        done
+        ALL_STEPS=("${_filtered[@]}")
+        TOTAL_STEPS=${#ALL_STEPS[@]}
+        # Ensure the accept step knows to run SG-only.
+        export SETUP_PEERING="false"
+    fi
 fi
 
 # =============================================================================
