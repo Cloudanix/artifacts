@@ -26,6 +26,11 @@ export AWS_DEFAULT_REGION="$AWS_REGION"
 REQUESTER_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
 ECS_SG_NAME="${PROJECT_NAME}-ecs-sg"
+# When network connectivity between the hub and the DB VPC already exists
+# (e.g. via Transit Gateway, existing peering, or shared VPC), set
+# SETUP_PEERING=false to skip creating peering + routes and only apply the
+# security-group whitelist. Defaults to true.
+SETUP_PEERING="${SETUP_PEERING:-true}"
 
 # =============================================================================
 # RESOLVE HUB VPC CIDR + ECS SG
@@ -46,59 +51,70 @@ ECS_SG=$(aws ec2 describe-security-groups \
 
 ok "Hub VPC: $HUB_VPC_ID ($HUB_VPC_CIDR) | ECS SG: ${ECS_SG:-<not found>}"
 info "New DB VPC: $DB_VPC_ID ($DB_VPC_CIDR) | account: $DB_ACCOUNT_ID"
+info "Set up peering: $SETUP_PEERING"
 
-# =============================================================================
-# CREATE PEERING
-# =============================================================================
+PEERING_ID=""
 
-step "VPC Peering Request"
-PEERING_ID=$(aws ec2 describe-vpc-peering-connections \
-    --filters "Name=requester-vpc-info.vpc-id,Values=$HUB_VPC_ID" \
-              "Name=accepter-vpc-info.vpc-id,Values=$DB_VPC_ID" \
-              "Name=status-code,Values=active,pending-acceptance,provisioning" \
-    --query 'VpcPeeringConnections[0].VpcPeeringConnectionId' --output text 2>/dev/null)
+if [[ "$SETUP_PEERING" == "true" ]]; then
+    # =========================================================================
+    # CREATE PEERING
+    # =========================================================================
+    step "VPC Peering Request"
+    PEERING_ID=$(aws ec2 describe-vpc-peering-connections \
+        --filters "Name=requester-vpc-info.vpc-id,Values=$HUB_VPC_ID" \
+                  "Name=accepter-vpc-info.vpc-id,Values=$DB_VPC_ID" \
+                  "Name=status-code,Values=active,pending-acceptance,provisioning" \
+        --query 'VpcPeeringConnections[0].VpcPeeringConnectionId' --output text 2>/dev/null)
 
-if [[ -n "$PEERING_ID" && "$PEERING_ID" != "None" ]]; then
-    ok "Peering already exists: $PEERING_ID"
-else
-    PEERING_ID=$(aws ec2 create-vpc-peering-connection \
-        --vpc-id "$HUB_VPC_ID" \
-        --peer-owner-id "$DB_ACCOUNT_ID" \
-        --peer-vpc-id "$DB_VPC_ID" \
-        --peer-region "$AWS_REGION" \
-        --tag-specifications "ResourceType=vpc-peering-connection,Tags=[{Key=Name,Value=cdx-jit-db-peering-${DB_VPC_ID}},{Key=Purpose,Value=db-jit},{Key=Environment,Value=Prod},{Key=Created_by,Value=Cloudanix},{Key=purpose,Value=jit_db},{Key=aws-apn-id,Value=${CDX_APN_ID}}]" \
-        --query 'VpcPeeringConnection.VpcPeeringConnectionId' --output text)
-
-    if [[ -z "$PEERING_ID" || "$PEERING_ID" == "None" ]]; then
-        error "Failed to create peering connection"; exit 1
-    fi
-    ok "Peering created: $PEERING_ID"
-
-    if [[ "$DB_ACCOUNT_ID" == "$REQUESTER_ACCOUNT_ID" ]]; then
-        info "Same account — auto-accepting..."
-        sleep 5
-        aws ec2 accept-vpc-peering-connection --vpc-peering-connection-id "$PEERING_ID" > /dev/null
-        ok "Peering auto-accepted (same account)"
+    if [[ -n "$PEERING_ID" && "$PEERING_ID" != "None" ]]; then
+        ok "Peering already exists: $PEERING_ID"
     else
-        info "Cross-account — step 04-accept-peering runs in the DB account"
+        PEERING_ID=$(aws ec2 create-vpc-peering-connection \
+            --vpc-id "$HUB_VPC_ID" \
+            --peer-owner-id "$DB_ACCOUNT_ID" \
+            --peer-vpc-id "$DB_VPC_ID" \
+            --peer-region "$AWS_REGION" \
+            --tag-specifications "ResourceType=vpc-peering-connection,Tags=[{Key=Name,Value=cdx-jit-db-peering-${DB_VPC_ID}},{Key=Purpose,Value=db-jit},{Key=Environment,Value=Prod},{Key=Created_by,Value=Cloudanix},{Key=purpose,Value=jit_db},{Key=aws-apn-id,Value=${CDX_APN_ID}}]" \
+            --query 'VpcPeeringConnection.VpcPeeringConnectionId' --output text)
+
+        if [[ -z "$PEERING_ID" || "$PEERING_ID" == "None" ]]; then
+            error "Failed to create peering connection"; exit 1
+        fi
+        ok "Peering created: $PEERING_ID"
+
+        if [[ "$DB_ACCOUNT_ID" == "$REQUESTER_ACCOUNT_ID" ]]; then
+            info "Same account — auto-accepting..."
+            sleep 5
+            aws ec2 accept-vpc-peering-connection --vpc-peering-connection-id "$PEERING_ID" > /dev/null
+            ok "Peering auto-accepted (same account)"
+        else
+            info "Cross-account — step 04-accept-peering runs in the DB account"
+        fi
     fi
+
+    # =========================================================================
+    # UPDATE HUB ROUTE TABLES
+    # =========================================================================
+    step "Hub Route Tables"
+    for RT in $(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$HUB_VPC_ID" \
+        --query 'RouteTables[*].RouteTableId' --output text); do
+        aws ec2 create-route --route-table-id "$RT" \
+            --destination-cidr-block "$DB_VPC_CIDR" \
+            --vpc-peering-connection-id "$PEERING_ID" > /dev/null 2>&1 || \
+        aws ec2 replace-route --route-table-id "$RT" \
+            --destination-cidr-block "$DB_VPC_CIDR" \
+            --vpc-peering-connection-id "$PEERING_ID" > /dev/null 2>&1 || true
+    done
+    ok "Routes updated for new DB CIDR: $DB_VPC_CIDR"
+else
+    step "VPC Peering — skipped"
+    info "SETUP_PEERING=false: assuming hub↔DB connectivity already exists."
+    info "Only the security-group whitelist will be applied."
 fi
 
 # =============================================================================
-# UPDATE HUB ROUTE TABLES + ECS SG
+# ECS SECURITY GROUP WHITELIST (always applied)
 # =============================================================================
-
-step "Hub Route Tables"
-for RT in $(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$HUB_VPC_ID" \
-    --query 'RouteTables[*].RouteTableId' --output text); do
-    aws ec2 create-route --route-table-id "$RT" \
-        --destination-cidr-block "$DB_VPC_CIDR" \
-        --vpc-peering-connection-id "$PEERING_ID" > /dev/null 2>&1 || \
-    aws ec2 replace-route --route-table-id "$RT" \
-        --destination-cidr-block "$DB_VPC_CIDR" \
-        --vpc-peering-connection-id "$PEERING_ID" > /dev/null 2>&1 || true
-done
-ok "Routes updated for new DB CIDR: $DB_VPC_CIDR"
 
 if [[ -n "$ECS_SG" ]]; then
     step "ECS Security Group"
@@ -113,7 +129,8 @@ fi
 # OUTPUT
 # =============================================================================
 
-ok "Onboard peering complete"
+ok "Onboard step complete"
 echo "OUTPUT:PEERING_CONNECTION_ID=${PEERING_ID}"
+echo "OUTPUT:PEERING_SKIPPED=$([[ "$SETUP_PEERING" == "true" ]] && echo false || echo true)"
 echo "OUTPUT:HUB_VPC_ID=${HUB_VPC_ID}"
 echo "OUTPUT:HUB_VPC_CIDR=${HUB_VPC_CIDR}"

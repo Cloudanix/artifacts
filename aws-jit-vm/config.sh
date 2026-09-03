@@ -101,7 +101,7 @@ CONFIG_FIELDS=(
     "CDX_API_AUTH_TOKEN|nonempty||CDX API Auth Token|new-vpc,existing-vpc|true"
     "CDX_SIGNATURE_SECRET_KEY|nonempty||CDX Signature Secret Key|new-vpc,existing-vpc|true"
     "CDX_SENTRY_DSN|nonempty||CDX Sentry DSN (optional)|new-vpc,existing-vpc|false"
-    "CDX_DATA_CENTER|nonempty|US|CDX Data Center|new-vpc,existing-vpc|false"
+    "CDX_DATA_CENTER|nonempty|US|CDX Data Center (US/EU/IN)|new-vpc,existing-vpc|false"
     "CDX_API_BASE|nonempty|https://console.cloudanix.com/|CDX API Base URL|new-vpc,existing-vpc|false"
     "VM_VPC_ID|nonempty||VM VPC ID|new-vpc,onboard-peered,onboard-new-account|false"
     "VM_VPC_CIDR|cidr||VM VPC CIDR|new-vpc,onboard-new-account|false"

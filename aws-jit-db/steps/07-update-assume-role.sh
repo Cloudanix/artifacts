@@ -31,14 +31,12 @@ DB_ACCOUNT_ID="${DB_ACCOUNT_ID:-$ACCOUNT_ID}"
 # CONFIGURATION
 # =============================================================================
 
-PROJECT_NAME="cdx-jit-db"
+PROJECT_NAME="${PROJECT_NAME:-cdx-jit-db}"
 ECS_ROLE_NAME="${PROJECT_NAME}-ECSRole"
 POLICY_NAME="cdx-ECSRDSAssumeRolePolicy"
-CROSS_ACCOUNT_ROLE_NAME="cdx-jit-db-cross-account-role"
-CROSS_ACCOUNT_ROLE_ARN="arn:aws:iam::${DB_ACCOUNT_ID}:role/${CROSS_ACCOUNT_ROLE_NAME}"
+
 info "JIT Account: $ACCOUNT_ID | DB Account: $DB_ACCOUNT_ID"
 info "ECS Role: $ECS_ROLE_NAME"
-info "Target: $CROSS_ACCOUNT_ROLE_ARN"
 
 # =============================================================================
 # VALIDATE ECS ROLE EXISTS
@@ -59,34 +57,36 @@ step "Assume-Role Policy"
 
 POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${POLICY_NAME}"
 
+# The ECS task must be able to assume the Cloudanix cross-account role(s) in any
+# onboarded DB account. Since those roles are named dynamically
+# (cdx-<region>-<account>-role_cross_accnt<hash>) and new accounts are onboarded
+# over time, the assume-role policy uses a wildcard Resource ("*") rather than a
+# fixed list of ARNs. Trust is still enforced on the DB side (each cross-account
+# role's trust policy only allows THIS ECS task role), so the wildcard here does
+# not grant broad access on its own.
+DESIRED_POLICY=$(jq -n '{
+    "Version": "2012-10-17",
+    "Statement": [{
+        "Sid": "AssumeDBAccountRole",
+        "Effect": "Allow",
+        "Action": "sts:AssumeRole",
+        "Resource": "*"
+    }]
+}')
+
 if aws iam get-policy --policy-arn "$POLICY_ARN" > /dev/null 2>&1; then
-    # Policy exists — get current version and check if role ARN is already there
     DEFAULT_VERSION=$(aws iam get-policy --policy-arn "$POLICY_ARN" \
         --query 'Policy.DefaultVersionId' --output text)
     CURRENT_POLICY=$(aws iam get-policy-version --policy-arn "$POLICY_ARN" \
         --version-id "$DEFAULT_VERSION" --query 'PolicyVersion.Document' --output json)
 
-    # Check if ARN already in Resource list
-    ALREADY_HAS=$(echo "$CURRENT_POLICY" | jq -r \
-        --arg arn "$CROSS_ACCOUNT_ROLE_ARN" \
-        '.Statement[0].Resource | if type == "array" then .[] else . end | select(. == $arn)' 2>/dev/null)
-
-    if [[ -n "$ALREADY_HAS" ]]; then
-        ok "Policy already includes: $CROSS_ACCOUNT_ROLE_ARN"
+    if [[ "$(echo "$CURRENT_POLICY" | jq -S .)" == "$(echo "$DESIRED_POLICY" | jq -S .)" ]]; then
+        ok "Assume-role policy already correct (Resource: *)"
         echo "OUTPUT:ASSUME_ROLE_UPDATED=true"
         exit 0
     fi
 
-    # Add the new role ARN to the Resource array
-    UPDATED_POLICY=$(echo "$CURRENT_POLICY" | jq \
-        --arg arn "$CROSS_ACCOUNT_ROLE_ARN" \
-        'if (.Statement[0].Resource | type) == "array" then
-            .Statement[0].Resource += [$arn]
-        else
-            .Statement[0].Resource = [.Statement[0].Resource, $arn]
-        end')
-
-    # Delete oldest policy version if at limit (max 5 versions)
+    # Delete oldest non-default version if at the 5-version limit.
     VERSION_COUNT=$(aws iam list-policy-versions --policy-arn "$POLICY_ARN" \
         --query 'length(Versions)' --output text)
     if [[ "$VERSION_COUNT" -ge 5 ]]; then
@@ -95,29 +95,16 @@ if aws iam get-policy --policy-arn "$POLICY_ARN" > /dev/null 2>&1; then
         aws iam delete-policy-version --policy-arn "$POLICY_ARN" --version-id "$OLDEST"
     fi
 
-    # Create new version
     aws iam create-policy-version --policy-arn "$POLICY_ARN" \
-        --policy-document "$UPDATED_POLICY" --set-as-default > /dev/null
-    ok "Policy updated: added $CROSS_ACCOUNT_ROLE_ARN"
+        --policy-document "$DESIRED_POLICY" --set-as-default > /dev/null
+    ok "Assume-role policy updated (Resource: *)"
 else
-    # Policy doesn't exist — create it
-    NEW_POLICY=$(jq -n --arg arn "$CROSS_ACCOUNT_ROLE_ARN" '{
-        "Version": "2012-10-17",
-        "Statement": [{
-            "Sid": "AssumeDBAccountRole",
-            "Effect": "Allow",
-            "Action": "sts:AssumeRole",
-            "Resource": [$arn]
-        }]
-    }')
-
     POLICY_ARN=$(aws iam create-policy --policy-name "$POLICY_NAME" \
-        --description "Allows ECS task role to assume cross-account DB roles" \
-        --policy-document "$NEW_POLICY" \
+        --description "Allows ECS task role to assume Cloudanix cross-account DB roles" \
+        --policy-document "$DESIRED_POLICY" \
         --query 'Policy.Arn' --output text)
-    ok "Policy created: $POLICY_NAME"
+    ok "Policy created: $POLICY_NAME (Resource: *)"
 
-    # Attach to ECS role
     aws iam attach-role-policy --role-name "$ECS_ROLE_NAME" --policy-arn "$POLICY_ARN"
     ok "Attached to $ECS_ROLE_NAME"
 fi

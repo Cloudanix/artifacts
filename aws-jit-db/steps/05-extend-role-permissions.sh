@@ -30,35 +30,54 @@ require_env AWS_REGION
 # CONFIGURATION
 # =============================================================================
 
-ROLE_NAME="cdx-jit-db-cross-account-role"
 ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
-
 info "Account: $ACCOUNT_ID | Region: $AWS_REGION"
-info "Role: $ROLE_NAME"
 
 # =============================================================================
-# CREATE OR UPDATE ROLE
+# DISCOVER EXISTING CROSS-ACCOUNT ROLE(S)
 # =============================================================================
+# The Cloudanix cross-account role(s) already exist in the DB account (created
+# during account onboarding), named like:
+#   cdx-<region>-<account>-role_cross_accnt<hash>
+# We do NOT create a role here — we find the existing one(s) and attach the RDS
+# policies to each. An explicit CROSS_ACCOUNT_ROLE_NAME (from config/env)
+# overrides discovery.
 
-step "Cross-Account Role"
-ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text 2>/dev/null) || ROLE_ARN=""
+step "Discover Cross-Account Role(s)"
+CROSS_ACCOUNT_ROLES=()
 
-if [[ -z "$ROLE_ARN" ]]; then
-    aws iam create-role --role-name "$ROLE_NAME" \
-        --assume-role-policy-document '{
-            "Version":"2012-10-17",
-            "Statement":[{
-                "Effect":"Allow",
-                "Principal":{"AWS":"arn:aws:iam::'$ACCOUNT_ID':root"},
-                "Action":"sts:AssumeRole"
-            }]
-        }' \
-        --tags $(cdx_tags_kv) > /dev/null
-    ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text)
-    ok "Role created: $ROLE_NAME ($ROLE_ARN)"
+if [[ -n "${CROSS_ACCOUNT_ROLE_NAME:-}" ]]; then
+    if aws iam get-role --role-name "$CROSS_ACCOUNT_ROLE_NAME" > /dev/null 2>&1; then
+        CROSS_ACCOUNT_ROLES=("$CROSS_ACCOUNT_ROLE_NAME")
+        ok "Using provided role: $CROSS_ACCOUNT_ROLE_NAME"
+    else
+        error "Provided CROSS_ACCOUNT_ROLE_NAME '$CROSS_ACCOUNT_ROLE_NAME' not found."
+        exit 1
+    fi
 else
-    ok "Role exists: $ROLE_NAME ($ROLE_ARN)"
+    # Discover by the Cloudanix cross-account naming pattern.
+    while IFS= read -r rn; do
+        [[ -n "$rn" ]] && CROSS_ACCOUNT_ROLES+=("$rn")
+    done < <(aws iam list-roles \
+        --query "Roles[?contains(RoleName, 'role_cross_accnt')].RoleName" \
+        --output text 2>/dev/null | tr '\t' '\n')
+
+    # Backward-compat: legacy fixed-name role from earlier builds.
+    if [[ ${#CROSS_ACCOUNT_ROLES[@]} -eq 0 ]]; then
+        if aws iam get-role --role-name "cdx-jit-db-cross-account-role" > /dev/null 2>&1; then
+            CROSS_ACCOUNT_ROLES=("cdx-jit-db-cross-account-role")
+        fi
+    fi
 fi
+
+if [[ ${#CROSS_ACCOUNT_ROLES[@]} -eq 0 ]]; then
+    error "No Cloudanix cross-account role found in account $ACCOUNT_ID."
+    error "Expected a role named like 'cdx-<region>-<account>-role_cross_accnt<hash>'."
+    error "Ensure the account is onboarded in Cloudanix first, or set"
+    error "CROSS_ACCOUNT_ROLE_NAME to the exact role name."
+    exit 1
+fi
+ok "Cross-account role(s): ${CROSS_ACCOUNT_ROLES[*]}"
 
 # =============================================================================
 # RDS CONNECT POLICY
@@ -85,7 +104,9 @@ else
         --query 'Policy.Arn' --output text)
     ok "Policy created: $RDS_CONNECT_POLICY_NAME"
 fi
-aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$RDS_CONNECT_POLICY_ARN" 2>/dev/null || true
+for _r in "${CROSS_ACCOUNT_ROLES[@]}"; do
+    aws iam attach-role-policy --role-name "$_r" --policy-arn "$RDS_CONNECT_POLICY_ARN" 2>/dev/null || true
+done
 
 # =============================================================================
 # RDS AUTH TOKEN GENERATION POLICY
@@ -116,20 +137,27 @@ else
         --query 'Policy.Arn' --output text)
     ok "Policy created: $RDS_AUTH_POLICY_NAME"
 fi
-aws iam attach-role-policy --role-name "$ROLE_NAME" --policy-arn "$RDS_AUTH_POLICY_ARN" 2>/dev/null || true
+for _r in "${CROSS_ACCOUNT_ROLES[@]}"; do
+    aws iam attach-role-policy --role-name "$_r" --policy-arn "$RDS_AUTH_POLICY_ARN" 2>/dev/null || true
+done
 
 # =============================================================================
 # VERIFY
 # =============================================================================
 
-info "Attached policies:"
-aws iam list-attached-role-policies --role-name "$ROLE_NAME" \
-    --query 'AttachedPolicies[*].PolicyName' --output text
+for _r in "${CROSS_ACCOUNT_ROLES[@]}"; do
+    info "Attached policies on $_r:"
+    aws iam list-attached-role-policies --role-name "$_r" \
+        --query 'AttachedPolicies[*].PolicyName' --output text
+done
 
 # =============================================================================
 # OUTPUT
 # =============================================================================
+# Emit the discovered role name(s) so downstream steps (trust + assume-role)
+# operate on the same role(s). Space-separated when more than one.
 
+CROSS_ACCOUNT_ROLE_NAMES="${CROSS_ACCOUNT_ROLES[*]}"
 ok "Role permissions extended successfully"
 echo "OUTPUT:ROLE_UPDATED=true"
-echo "OUTPUT:CROSS_ACCOUNT_ROLE_ARN=${ROLE_ARN}"
+echo "OUTPUT:CROSS_ACCOUNT_ROLE_NAMES=${CROSS_ACCOUNT_ROLE_NAMES}"
