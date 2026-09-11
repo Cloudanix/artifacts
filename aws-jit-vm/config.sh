@@ -50,7 +50,12 @@ STEP_ACCOUNT["03-install-workloads"]="jit-workload"
 STEP_ACCOUNT["03-install-workloads-existing-vpc"]="jit-workload"
 STEP_ACCOUNT["04-setup-vpc-peering"]="jit-workload"
 STEP_ACCOUNT["05-accept-peering"]="vm-account"
-STEP_ACCOUNT["06-store-ssh-key"]="vm-account"
+# The SSH-keys secret is read by the proxy at runtime, which runs in the
+# JIT/hub account (same account as the ECS cluster and the app-config secret).
+# It MUST therefore be created/populated in the jit-workload account — not the
+# VM target account — otherwise the proxy's GetSecretValue fails with
+# ResourceNotFoundException when VM and JIT accounts differ.
+STEP_ACCOUNT["06-store-ssh-key"]="jit-workload"
 STEP_ACCOUNT["07-onboard-peered"]="vm-account"
 STEP_ACCOUNT["08-onboard-peering"]="jit-workload"
 
@@ -89,7 +94,7 @@ ACCOUNT_ID_FIELD["vm-account"]="VM_ACCOUNT_ID"
 
 CONFIG_FIELDS=(
     "AWS_REGION|region|us-east-1|AWS Region|*|false"
-    "JIT_ACCOUNT_ID|aws_account_id||JIT Workload Account ID|new-vpc,existing-vpc,onboard-new-account|false"
+    "JIT_ACCOUNT_ID|aws_account_id||JIT Workload Account ID (where the proxy + SSH-keys secret live)|new-vpc,existing-vpc,onboard-peered,onboard-new-account|false"
     "VM_ACCOUNT_ID|aws_account_id||VM Target Account ID|new-vpc,existing-vpc,onboard-peered,onboard-new-account|false"
     "MGMT_ACCOUNT_ID|aws_account_id||Management Account ID (SSO)|new-vpc,existing-vpc|false"
     "SSO_INSTANCE_ARN|arn|arn:aws:sso:::instance/ssoins-722367552337aabd|SSO Instance ARN|new-vpc,existing-vpc|false"
