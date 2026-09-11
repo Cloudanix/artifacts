@@ -145,6 +145,32 @@ else
 fi
 
 # =============================================================================
+# CONFIRMATION SUMMARY
+# =============================================================================
+# The VM proxy reads THIS secret ($SECRET_NAME) in THIS region ($AWS_REGION),
+# looking up the target instance ID as a JSON key. Show exactly what is stored
+# so the operator can confirm the proxy will find its key — and warn loudly if
+# no keys are present yet.
+
+STORED_KEYS=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" \
+    --query 'SecretString' --output text 2>/dev/null | jq -r 'keys | join(", ")' 2>/dev/null || echo "")
+
+echo ""
+step "SSH Key Secret Summary"
+info "Secret name : $SECRET_NAME"
+info "Region      : $AWS_REGION   (the proxy MUST run in this region)"
+if [[ -n "$STORED_KEYS" ]]; then
+    info "Stored instance keys: $STORED_KEYS"
+else
+    warn "No SSH keys are stored in this secret yet."
+    warn "The VM proxy will fail with KEY_FETCH_FAILED until you add the target"
+    warn "VM's key. Add it with:"
+    warn "  aws secretsmanager put-secret-value --region $AWS_REGION \\"
+    warn "    --secret-id $SECRET_NAME \\"
+    warn "    --secret-string '{\"i-XXXXXXXX\":\"<PRIVATE_KEY_CONTENTS>\"}'"
+fi
+
+# =============================================================================
 # OUTPUT
 # =============================================================================
 

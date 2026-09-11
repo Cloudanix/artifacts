@@ -234,6 +234,23 @@ else
     ok "Secret updated: $APP_SECRET_NAME (refreshed keys)"
 fi
 
+# Ensure the SSH-keys secret ALSO exists (empty placeholder) as soon as the
+# proxy is deployed. The vmproxyserver task reads CDX_VM_SECRETS_MANAGER_NAME =
+# ${PROJECT_NAME}-ssh-keys at runtime; if that secret is missing entirely the
+# proxy fails with ResourceNotFoundException. Step 06 populates the actual keys,
+# but creating the placeholder here guarantees the secret exists even if step 06
+# is skipped or interrupted. Same name/region the proxy uses.
+SSH_KEYS_SECRET_NAME="${PROJECT_NAME}-ssh-keys"
+if ! aws secretsmanager describe-secret --secret-id "$SSH_KEYS_SECRET_NAME" > /dev/null 2>&1; then
+    aws secretsmanager create-secret --name "$SSH_KEYS_SECRET_NAME" \
+        --description "SSH keys for target VMs (instance-id → private key)" \
+        --secret-string '{}' \
+        --tags $(cdx_tags_kv) > /dev/null
+    ok "Secret created: $SSH_KEYS_SECRET_NAME (empty — populate keys in step 06)"
+else
+    ok "Secret exists: $SSH_KEYS_SECRET_NAME"
+fi
+
 # =============================================================================
 # EFS (shared volume: sshpiper workingdir + recordings)
 # =============================================================================
