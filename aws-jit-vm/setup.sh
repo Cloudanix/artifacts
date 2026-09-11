@@ -600,6 +600,16 @@ for step_id in "${ALL_STEPS[@]}"; do
             export AWS_EC2_METADATA_DISABLED=true
             unset AWS_CONTAINER_CREDENTIALS_RELATIVE_URI 2>/dev/null || true
             info "Switched to: $account_label"
+        else
+            # No credentials were collected for this account context. Running the
+            # step would silently use the PREVIOUS step's credentials (wrong
+            # account), which has caused resources to be created in the wrong
+            # account (e.g. the SSH-keys secret). Fail loudly instead.
+            error "No credentials available for '$account_label' (context: $step_account)."
+            error "Step '$step_label' must run in that account. This usually means"
+            error "the account ID for it was not provided during configuration."
+            error "Re-run setup and supply credentials for $account_label."
+            exit 1
         fi
 
         CURRENT_ACCOUNT="$step_account"

@@ -36,6 +36,25 @@ info "Secret Name: $SECRET_NAME"
 info "Region: $AWS_REGION"
 
 # =============================================================================
+# ACCOUNT GUARD
+# =============================================================================
+# This secret is read by the proxy, which runs in the JIT/hub account. If we're
+# somehow NOT in that account (e.g. a credential switch fell through to the VM
+# account), storing the key here creates it in the wrong account and the proxy
+# will never find it. Verify the current account matches JIT_ACCOUNT_ID.
+CURRENT_ACCT=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "")
+if [[ -n "${JIT_ACCOUNT_ID:-}" && -n "$CURRENT_ACCT" && "$CURRENT_ACCT" != "$JIT_ACCOUNT_ID" ]]; then
+    error "Wrong account for the SSH-keys secret."
+    error "  Current account : $CURRENT_ACCT"
+    error "  Expected (JIT)  : $JIT_ACCOUNT_ID"
+    error "The proxy reads '$SECRET_NAME' from the JIT/hub account. Storing it"
+    error "here would make it unreachable. Re-run with credentials for the JIT"
+    error "account, or set JIT_ACCOUNT_ID to the account the proxy runs in."
+    exit 1
+fi
+info "Account: ${CURRENT_ACCT:-unknown} (JIT/hub — where the proxy reads this secret)"
+
+# =============================================================================
 # CHECK / CREATE SECRET (idempotent)
 # =============================================================================
 
