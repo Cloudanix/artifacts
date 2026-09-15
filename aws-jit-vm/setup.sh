@@ -612,6 +612,46 @@ for step_id in "${ALL_STEPS[@]}"; do
             exit 1
         fi
 
+        # -------------------------------------------------------------------
+        # POST-SWITCH ACCOUNT VERIFICATION (fail-closed)
+        # -------------------------------------------------------------------
+        # Whatever path we took above (stored creds OR the __current__ shortcut),
+        # verify that the credentials now active actually resolve to the account
+        # this step is supposed to run in. This is the backstop that prevents a
+        # step from executing against the wrong account — e.g. the SSH-keys
+        # secret landing in the VM target account because the __current__
+        # CloudShell credentials belonged to the VM account, not the JIT account.
+        expected_acct_field="${ACCOUNT_ID_FIELD[$step_account]:-}"
+        expected_acct_id=""
+        if [[ -n "$expected_acct_field" ]]; then
+            expected_acct_id=$(get_config_value "$STATE_FILE" "$expected_acct_field")
+        fi
+
+        if [[ -n "$expected_acct_id" ]]; then
+            active_acct_id=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null) || active_acct_id=""
+            if [[ -z "$active_acct_id" ]]; then
+                error "Could not resolve the active AWS account before running '$step_label'."
+                error "Cannot verify it targets $account_label ($expected_acct_id). Aborting."
+                exit 1
+            fi
+            if [[ "$active_acct_id" != "$expected_acct_id" ]]; then
+                error "Account verification FAILED for step '$step_label'."
+                error "  Active account   : $active_acct_id"
+                error "  Expected account : $expected_acct_id ($account_label)"
+                error ""
+                error "The active credentials do not belong to the account this step must"
+                error "run in. This most often happens on CloudShell when 'current'"
+                error "credentials (the account CloudShell runs in) were reused for a"
+                error "different account context. Re-run setup and paste real credentials"
+                error "for $account_label — do NOT rely on current/CloudShell credentials"
+                error "when the step account differs from the CloudShell account."
+                exit 1
+            fi
+            ok "Account verified for $account_label: $active_acct_id"
+        else
+            warn "No expected account ID configured for '$account_label' — skipping verification."
+        fi
+
         CURRENT_ACCOUNT="$step_account"
     fi
 

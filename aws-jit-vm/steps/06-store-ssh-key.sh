@@ -36,23 +36,47 @@ info "Secret Name: $SECRET_NAME"
 info "Region: $AWS_REGION"
 
 # =============================================================================
-# ACCOUNT GUARD
+# ACCOUNT GUARD (fail-closed)
 # =============================================================================
 # This secret is read by the proxy, which runs in the JIT/hub account. If we're
-# somehow NOT in that account (e.g. a credential switch fell through to the VM
-# account), storing the key here creates it in the wrong account and the proxy
-# will never find it. Verify the current account matches JIT_ACCOUNT_ID.
+# NOT in that account (e.g. a credential switch fell through to the VM account,
+# or this step runs right after a vm-account step such as 07-onboard-peered),
+# storing the key here creates it in the WRONG account and the proxy will never
+# find it — the exact bug this guard exists to prevent.
+#
+# The guard is fail-closed: it REQUIRES both JIT_ACCOUNT_ID and a resolvable
+# current account, and aborts if either is missing. A soft guard that only
+# checked "when JIT_ACCOUNT_ID happens to be set" would silently no-op and let
+# the secret land in the VM account whenever that variable wasn't propagated.
 CURRENT_ACCT=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "")
-if [[ -n "${JIT_ACCOUNT_ID:-}" && -n "$CURRENT_ACCT" && "$CURRENT_ACCT" != "$JIT_ACCOUNT_ID" ]]; then
+
+if [[ -z "${JIT_ACCOUNT_ID:-}" ]]; then
+    error "JIT_ACCOUNT_ID is not set — cannot verify this step runs in the JIT account."
+    error "The SSH-keys secret '$SECRET_NAME' MUST be created in the JIT/hub account"
+    error "(where the proxy runs), not the VM target account. Refusing to continue"
+    error "without knowing the expected account."
+    error "Set JIT_ACCOUNT_ID to the JIT workload account ID and re-run."
+    exit 1
+fi
+
+if [[ -z "$CURRENT_ACCT" ]]; then
+    error "Could not resolve the current AWS account (sts get-caller-identity failed)."
+    error "Cannot safely verify the target account for the SSH-keys secret. Aborting."
+    exit 1
+fi
+
+if [[ "$CURRENT_ACCT" != "$JIT_ACCOUNT_ID" ]]; then
     error "Wrong account for the SSH-keys secret."
     error "  Current account : $CURRENT_ACCT"
     error "  Expected (JIT)  : $JIT_ACCOUNT_ID"
     error "The proxy reads '$SECRET_NAME' from the JIT/hub account. Storing it"
-    error "here would make it unreachable. Re-run with credentials for the JIT"
-    error "account, or set JIT_ACCOUNT_ID to the account the proxy runs in."
+    error "here (the VM target account) would make it unreachable and the proxy"
+    error "would fail with ResourceNotFoundException / KEY_FETCH_FAILED."
+    error "Re-run with credentials for the JIT account ($JIT_ACCOUNT_ID)."
     exit 1
 fi
-info "Account: ${CURRENT_ACCT:-unknown} (JIT/hub — where the proxy reads this secret)"
+
+ok "Account verified: $CURRENT_ACCT (JIT/hub — where the proxy reads this secret)"
 
 # =============================================================================
 # CHECK / CREATE SECRET (idempotent)
