@@ -1,0 +1,20 @@
+# Dashboard on the general node group.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wazuh-dashboard
+  namespace: wazuh
+spec:
+  template:
+    spec:
+      nodeSelector:
+        workload: general
+      containers:
+        - name: wazuh-dashboard
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 500m
+              memory: 2Gi

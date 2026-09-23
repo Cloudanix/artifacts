@@ -1,0 +1,27 @@
+# AWS gp3 StorageClass via the EBS CSI driver.
+#
+# Overrides the base wazuh-storage StorageClass. gp3 gives better baseline
+# IOPS/throughput than gp2 at lower cost. WaitForFirstConsumer so the volume is
+# created in the same AZ as the pod that mounts it. reclaimPolicy: Retain so an
+# accidental PVC delete does not destroy indexer/manager data.
+#
+# A strategic-merge patch cannot change the immutable `provisioner` field on an
+# existing StorageClass, but on a fresh cluster this replaces the base one at
+# apply time. If wazuh-storage already exists with a different provisioner,
+# delete it first: kubectl delete sc wazuh-storage
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: wazuh-storage
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  encrypted: 'true'
+  tagSpecification_1: "aws-apn-id=pc:2k1o8bijfwf7aykfulhgkc2uo"
+  tagSpecification_2: "Created_by=Cloudanix"
+  tagSpecification_3: "Environment=Prod"
+  tagSpecification_4: "purpose=wazuh_vm_scan"
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+allowVolumeExpansion: true

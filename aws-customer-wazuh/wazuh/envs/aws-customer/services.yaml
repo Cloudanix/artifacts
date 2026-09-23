@@ -1,0 +1,71 @@
+---
+# Convert the base AWS NLB manager Services into internet-facing NLBs managed by
+# the AWS Load Balancer Controller.
+#
+# These are strategic-merge PATCHES (not new resources): the shared base already
+# defines the `wazuh` (master: 1515 + 55000) and `wazuh-workers` (1514) Services
+# with the correct names/selectors/ports. We replace the annotations map with the
+# modern LB Controller scheme.
+#
+# `$patch: replace` on annotations makes the strategic merge REPLACE the base's
+# annotations wholesale (instead of merging), so the base's legacy in-tree
+# `aws-load-balancer-type: nlb` annotation is dropped and does not conflict with
+# the modern `type: external`.
+#
+# Cross-zone is enabled so traffic can reach targets in any AZ that is ENABLED
+# on the NLB. Important: NLB only enables AZs where it has a subnet. With a
+# single public subnet, only that one AZ is enabled — worker pods in other AZs
+# show as "unused". Prefer 2+ public subnets (one per worker AZ). See README
+# "Single public subnet".
+#
+# Optional: pin the NLB to explicit public subnet IDs (comma-separated):
+#   service.beta.kubernetes.io/aws-load-balancer-subnets: subnet-aaa,subnet-bbb
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh
+  namespace: wazuh
+  annotations:
+    $patch: replace
+    service.beta.kubernetes.io/aws-load-balancer-type: external
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: tcp
+    service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "aws-apn-id=pc:2k1o8bijfwf7aykfulhgkc2uo,Created_by=Cloudanix,Environment=Prod,purpose=wazuh_vm_scan"
+spec:
+  loadBalancerClass: service.k8s.aws/nlb
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh-workers
+  namespace: wazuh
+  annotations:
+    $patch: replace
+    service.beta.kubernetes.io/aws-load-balancer-type: external
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: tcp
+    service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "aws-apn-id=pc:2k1o8bijfwf7aykfulhgkc2uo,Created_by=Cloudanix,Environment=Prod,purpose=wazuh_vm_scan"
+spec:
+  loadBalancerClass: service.k8s.aws/nlb
+---
+# Ownership tags on the internal dashboard/indexer NLBs (merge, do not replace
+# existing SSL/backend annotations from the base Service).
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard
+  namespace: wazuh
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "aws-apn-id=pc:2k1o8bijfwf7aykfulhgkc2uo,Created_by=Cloudanix,Environment=Prod,purpose=wazuh_vm_scan"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: indexer
+  namespace: wazuh
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "aws-apn-id=pc:2k1o8bijfwf7aykfulhgkc2uo,Created_by=Cloudanix,Environment=Prod,purpose=wazuh_vm_scan"

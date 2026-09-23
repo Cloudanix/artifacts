@@ -19,7 +19,7 @@ VERSION="1.0.0"
 # Branch/ref to pull setup files from. Override for testing a feature branch:
 #   CDX_REPO_REF=ecr-changes curl ... | bash -s -- aws-jit-db
 # or point REPO_BASE at any raw base URL directly via CDX_REPO_BASE.
-CDX_REPO_REF="${CDX_REPO_REF:-Divyansh-master-script}"
+CDX_REPO_REF="${CDX_REPO_REF:-main}"
 REPO_BASE="${CDX_REPO_BASE:-https://raw.githubusercontent.com/Cloudanix/artifacts/${CDX_REPO_REF}}"
 INSTALL_DIR="${CDX_INSTALL_DIR:-$HOME/.cdx-jit}"
 
@@ -72,11 +72,12 @@ echo -e "${R}"
 # SETUP TYPE SELECTION
 # =============================================================================
 
-SETUP_TYPES=("aws-jit-db" "aws-jit-vm" "aws-jit-eks" "azure-jit-db" "azure-jit-k8s" "gcp-jit-db")
+SETUP_TYPES=("aws-jit-db" "aws-jit-vm" "aws-jit-eks" "aws-customer-wazuh" "azure-jit-db" "azure-jit-k8s" "gcp-jit-db")
 SETUP_LABELS=(
     "AWS JIT Database"
     "AWS JIT VM (SSH Proxy)"
     "AWS JIT EKS (Kubernetes)"
+    "AWS Wazuh Central Server"
     "Azure JIT Database"
     "Azure JIT Kubernetes (AKS)"
     "GCP JIT Database"
@@ -123,6 +124,7 @@ echo -e "${B}Checking prerequisites...${R}"
 
 REQUIRED_TOOLS=("jq" "curl")
 case "$SELECTED" in
+    aws-customer-wazuh) REQUIRED_TOOLS+=("aws" "kubectl" "helm" "python3" "openssl" "tar") ;;
     aws-*)  REQUIRED_TOOLS+=("aws" "docker") ;;
     azure-*) REQUIRED_TOOLS+=("az" "jq") ;;
     gcp-*)  REQUIRED_TOOLS+=("gcloud" "docker") ;;
@@ -146,6 +148,20 @@ if [[ ${#MISSING[@]} -gt 0 ]]; then
 fi
 
 echo -e "  ${G}✓${R} All prerequisites met"
+
+# Wazuh is a self-contained multi-directory playbook rather than the shared
+# step/MANIFEST format used by the JIT installers. Hand off to its downloader,
+# which fetches the complete versioned bundle and runs its setup orchestrator.
+if [[ "$SELECTED" == "aws-customer-wazuh" ]]; then
+    WAZUH_BOOTSTRAP="$(mktemp)"
+    trap 'rm -f "$WAZUH_BOOTSTRAP"' EXIT
+    cdx_curl "${REPO_BASE}/aws-customer-wazuh/install.sh" -o "$WAZUH_BOOTSTRAP"
+    chmod +x "$WAZUH_BOOTSTRAP"
+    CDX_REPO_REF="$CDX_REPO_REF" \
+      CDX_INSTALL_DIR="${CDX_WAZUH_INSTALL_DIR:-$HOME/.cloudanix/aws-customer-wazuh}" \
+      "$WAZUH_BOOTSTRAP"
+    exit $?
+fi
 
 # =============================================================================
 # DOWNLOAD FILES

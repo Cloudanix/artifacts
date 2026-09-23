@@ -1,0 +1,152 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Wazuh central server - EKS control plane into a customer-provided VPC.
+  Creates the EKS cluster, its cluster role, the cluster security group, and the
+  IAM OIDC provider used for IRSA (AWS Load Balancer Controller, EBS CSI driver).
+  Node groups and IRSA app roles are in separate stacks (02, 03).
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: wazuh
+    Description: EKS cluster name.
+  KubernetesVersion:
+    Type: String
+    Default: '1.31'
+    Description: EKS control plane Kubernetes version.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing customer VPC to deploy into.
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: >-
+      Exactly 2 PRIVATE subnet IDs (in 2 different AZs) for EKS worker nodes.
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: >-
+      1 or more PUBLIC subnet IDs for the internet-facing NLBs (the manager
+      endpoints are internet-facing). 1 is fine for test/QA; use 2+ (multi-AZ)
+      for production resilience.
+  EndpointPublicAccess:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Allow public access to the EKS API server endpoint.
+  EndpointPrivateAccess:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Allow private (in-VPC) access to the EKS API server endpoint.
+
+Resources:
+  ClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ClusterName}-eks-cluster-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: eks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+      Tags:
+        - Key: aws-apn-id
+          Value: pc:2k1o8bijfwf7aykfulhgkc2uo
+        - Key: Created_by
+          Value: Cloudanix
+        - Key: Environment
+          Value: Prod
+        - Key: purpose
+          Value: wazuh_vm_scan
+
+  ClusterSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub 'EKS cluster SG for ${ClusterName}'
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub '${ClusterName}-cluster-sg'
+        - Key: aws-apn-id
+          Value: pc:2k1o8bijfwf7aykfulhgkc2uo
+        - Key: Created_by
+          Value: Cloudanix
+        - Key: Environment
+          Value: Prod
+        - Key: purpose
+          Value: wazuh_vm_scan
+
+  Cluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Ref ClusterName
+      Version: !Ref KubernetesVersion
+      RoleArn: !GetAtt ClusterRole.Arn
+      ResourcesVpcConfig:
+        SecurityGroupIds:
+          - !Ref ClusterSecurityGroup
+        # Control-plane ENIs live in the private subnets; the public subnets are
+        # supplied so the AWS Load Balancer Controller can discover them for the
+        # internet-facing NLBs (subnet tagging done by deploy.sh).
+        SubnetIds: !Split
+          - ','
+          - !Sub
+            - '${priv},${pub}'
+            - priv: !Join [',', !Ref PrivateSubnetIds]
+              pub: !Join [',', !Ref PublicSubnetIds]
+        EndpointPublicAccess: !Ref EndpointPublicAccess
+        EndpointPrivateAccess: !Ref EndpointPrivateAccess
+      Tags:
+        - Key: aws-apn-id
+          Value: pc:2k1o8bijfwf7aykfulhgkc2uo
+        - Key: Created_by
+          Value: Cloudanix
+        - Key: Environment
+          Value: Prod
+        - Key: purpose
+          Value: wazuh_vm_scan
+
+  # IAM OIDC provider for IRSA. Required by the LB Controller + EBS CSI roles.
+  OIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: !GetAtt Cluster.OpenIdConnectIssuerUrl
+      ClientIdList:
+        - sts.amazonaws.com
+      # EKS OIDC root CA thumbprint (Amazon root CA 1). Stable across EKS.
+      ThumbprintList:
+        - 9e99a48a9960b14926bb7f3b02e22da2b0ab7280
+      Tags:
+        - Key: aws-apn-id
+          Value: pc:2k1o8bijfwf7aykfulhgkc2uo
+        - Key: Created_by
+          Value: Cloudanix
+        - Key: Environment
+          Value: Prod
+        - Key: purpose
+          Value: wazuh_vm_scan
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+    Export:
+      Name: !Sub '${ClusterName}-cluster-name'
+  ClusterArn:
+    Value: !GetAtt Cluster.Arn
+  ClusterSecurityGroupId:
+    Value: !Ref ClusterSecurityGroup
+    Export:
+      Name: !Sub '${ClusterName}-cluster-sg'
+  ClusterEndpoint:
+    Value: !GetAtt Cluster.Endpoint
+  OIDCIssuerUrl:
+    Value: !GetAtt Cluster.OpenIdConnectIssuerUrl
+    Export:
+      Name: !Sub '${ClusterName}-oidc-issuer'
+  OIDCProviderArn:
+    Value: !Ref OIDCProvider
+    Export:
+      Name: !Sub '${ClusterName}-oidc-arn'

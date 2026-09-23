@@ -1,0 +1,101 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Wazuh central server - OPTIONAL ECR Pull-Through Cache (Option 2).
+
+  Creates an ECR pull-through cache rule in the CUSTOMER account whose upstream is
+  ECR Public (public.ecr.aws), where Cloudanix publishes the Wazuh manager images
+  (account 774118602354). With this rule, customer EKS nodes pull the images
+  through the customer's own ECR under the "ecr-public/" prefix; ECR lazily fetches
+  from the public upstream on first pull and caches it. No manual sync script is
+  ever needed again.
+
+  This stack is OPT-IN. It is NOT wired into deploy.sh by default because public
+  ECR images are already directly pullable; use it only if the customer wants all
+  pulls served from their own account (air-gapped-ish egress control, quotas, or
+  pull-rate isolation).
+
+  After creating the rule, retarget the kustomize images: block in
+  wazuh/envs/aws-customer/kustomization.yml to:
+    <acct>.dkr.ecr.<region>.amazonaws.com/ecr-public/cloudanix/wazuh-master-custom
+    <acct>.dkr.ecr.<region>.amazonaws.com/ecr-public/cloudanix/wazuh-worker-custom
+
+Parameters:
+  RepositoryPrefix:
+    Type: String
+    Default: ecr-public
+    Description: >-
+      Namespace prefix under which cached repos are created in the customer ECR,
+      e.g. images become
+      <acct>.dkr.ecr.<region>.amazonaws.com/<prefix>/cloudanix/wazuh-master-custom.
+  NodeInstanceRoleName:
+    Type: String
+    Default: ''
+    Description: >-
+      OPTIONAL. Name of the EKS node group instance role to grant the extra
+      pull-through-cache pull permissions to (BatchImportUpstreamImage,
+      CreateRepository, GetImageCopyStatus). Leave blank to skip the managed
+      policy (attach the permissions yourself).
+
+Conditions:
+  AttachNodePolicy: !Not [!Equals [!Ref NodeInstanceRoleName, '']]
+
+Resources:
+  # The pull-through cache rule. Upstream is ECR Public; no upstream credential
+  # is required because public.ecr.aws is anonymously pullable.
+  CloudanixPublicCacheRule:
+    Type: AWS::ECR::PullThroughCacheRule
+    Properties:
+      EcrRepositoryPrefix: !Ref RepositoryPrefix
+      UpstreamRegistryUrl: public.ecr.aws
+
+  # Extra permissions the node role needs so the FIRST pull can import + create the
+  # cached repository. Normal pulls only need the standard ECR read actions (already
+  # on AmazonEKSWorkerNodePolicy); the pull-through import needs these additional
+  # actions the first time each image/layer is fetched from the upstream.
+  PullThroughCachePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: AttachNodePolicy
+    Properties:
+      Description: >-
+        Allows EKS nodes to populate the ECR pull-through cache from the ECR Public
+        upstream on first pull of the Cloudanix Wazuh images.
+      Tags:
+        - Key: aws-apn-id
+          Value: pc:2k1o8bijfwf7aykfulhgkc2uo
+        - Key: Created_by
+          Value: Cloudanix
+        - Key: Environment
+          Value: Prod
+        - Key: purpose
+          Value: wazuh_vm_scan
+      Roles:
+        - !Ref NodeInstanceRoleName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PullThroughCacheImport
+            Effect: Allow
+            Action:
+              - ecr:CreateRepository
+              - ecr:ReplicateImage
+              - ecr:BatchImportUpstreamImage
+              - ecr:GetImageCopyStatus
+              - ecr:TagResource
+            Resource:
+              - !Sub arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${RepositoryPrefix}/*
+          - Sid: EcrAuth
+            Effect: Allow
+            Action:
+              - ecr:GetAuthorizationToken
+            Resource: '*'
+
+Outputs:
+  RepositoryPrefix:
+    Description: Prefix to place in front of the public.ecr.aws path when pulling.
+    Value: !Ref RepositoryPrefix
+  MasterImageViaCache:
+    Description: "Master image reference for the kustomize images: override."
+    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${RepositoryPrefix}/cloudanix/wazuh-master-custom
+  WorkerImageViaCache:
+    Description: "Worker image reference for the kustomize images: override."
+    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${RepositoryPrefix}/cloudanix/wazuh-worker-custom

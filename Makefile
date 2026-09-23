@@ -22,7 +22,7 @@ test-all: test ## Alias for 'test'
 
 lint: ## Check bash syntax on all scripts
 	@echo "━━━ Syntax Check ━━━"
-	@find lib aws-jit-db aws-jit-vm aws-jit-eks -name "*.sh" -exec bash -n {} \; -print
+	@find lib aws-jit-db aws-jit-vm aws-jit-eks aws-customer-wazuh -name "*.sh" -exec bash -n {} \; -print
 	@echo ""
 	@echo "✓ All scripts pass syntax validation"
 

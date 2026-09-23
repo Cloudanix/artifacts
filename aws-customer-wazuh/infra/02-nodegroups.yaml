@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Wazuh central server - two EKS managed node groups in the customer's private
+  subnets:
+    * general-ng : indexers (3) + master (1) + dashboard. No taint.
+    * worker-ng  : Wazuh workers (3). Tainted workload=wazuh-worker:NoSchedule and
+                   labeled workload=wazuh-worker so only the worker pods land here.
+  Depends on stack 01 (EKS cluster) via imports.
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: wazuh
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: The 2 PRIVATE subnet IDs (same as stack 01) for the node groups.
+
+  GeneralInstanceType:
+    Type: String
+    Default: m5.xlarge
+    Description: >-
+      Instance type for the general node group (indexers are memory-heavy).
+      m5.xlarge = 4 vCPU / 16 GiB. Use r5.xlarge (4/32) for larger indexers.
+  GeneralDesiredSize:
+    Type: Number
+    Default: 3
+    Description: Desired general nodes (3 -> one per indexer, satisfies anti-affinity).
+  GeneralMinSize:
+    Type: Number
+    Default: 3
+  GeneralMaxSize:
+    Type: Number
+    Default: 5
+
+  WorkerInstanceType:
+    Type: String
+    Default: m5.large
+    Description: 'Instance type for the worker node group. m5.large = 2 vCPU / 8 GiB.'
+  WorkerDesiredSize:
+    Type: Number
+    Default: 2
+    Description: Desired worker nodes (2 -> fits 3 workers, ~1-2 per node).
+  WorkerMinSize:
+    Type: Number
+    Default: 2
+  WorkerMaxSize:
+    Type: Number
+    Default: 3
+
+  NodeDiskSize:
+    Type: Number
+    Default: 50
+    Description: Node root EBS volume size (GiB).
+
+Resources:
+  NodeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ClusterName}-eks-node-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        # Lets nodes mount EBS volumes for the gp3 StorageClass (belt-and-suspenders
+        # alongside the EBS CSI IRSA role in stack 03).
+        - arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy
+      Tags:
+        - Key: aws-apn-id
+          Value: pc:2k1o8bijfwf7aykfulhgkc2uo
+        - Key: Created_by
+          Value: Cloudanix
+        - Key: Environment
+          Value: Prod
+        - Key: purpose
+          Value: wazuh_vm_scan
+
+  GeneralNodeGroup:
+    Type: AWS::EKS::Nodegroup
+    Properties:
+      ClusterName:
+        Fn::ImportValue: !Sub '${ClusterName}-cluster-name'
+      NodegroupName: general-ng
+      NodeRole: !GetAtt NodeRole.Arn
+      Subnets: !Ref PrivateSubnetIds
+      InstanceTypes:
+        - !Ref GeneralInstanceType
+      DiskSize: !Ref NodeDiskSize
+      AmiType: AL2023_x86_64_STANDARD
+      ScalingConfig:
+        DesiredSize: !Ref GeneralDesiredSize
+        MinSize: !Ref GeneralMinSize
+        MaxSize: !Ref GeneralMaxSize
+      Labels:
+        workload: general
+      Tags:
+        Name: !Sub '${ClusterName}-general-ng'
+        aws-apn-id: pc:2k1o8bijfwf7aykfulhgkc2uo
+        Created_by: Cloudanix
+        Environment: Prod
+        purpose: wazuh_vm_scan
+
+  WorkerNodeGroup:
+    Type: AWS::EKS::Nodegroup
+    Properties:
+      ClusterName:
+        Fn::ImportValue: !Sub '${ClusterName}-cluster-name'
+      NodegroupName: worker-ng
+      NodeRole: !GetAtt NodeRole.Arn
+      Subnets: !Ref PrivateSubnetIds
+      InstanceTypes:
+        - !Ref WorkerInstanceType
+      DiskSize: !Ref NodeDiskSize
+      AmiType: AL2023_x86_64_STANDARD
+      ScalingConfig:
+        DesiredSize: !Ref WorkerDesiredSize
+        MinSize: !Ref WorkerMinSize
+        MaxSize: !Ref WorkerMaxSize
+      Labels:
+        workload: wazuh-worker
+      Taints:
+        - Key: workload
+          Value: wazuh-worker
+          Effect: NO_SCHEDULE
+      Tags:
+        Name: !Sub '${ClusterName}-worker-ng'
+        aws-apn-id: pc:2k1o8bijfwf7aykfulhgkc2uo
+        Created_by: Cloudanix
+        Environment: Prod
+        purpose: wazuh_vm_scan
+
+Outputs:
+  NodeRoleArn:
+    Value: !GetAtt NodeRole.Arn
+    Export:
+      Name: !Sub '${ClusterName}-node-role-arn'
+  GeneralNodeGroupName:
+    Value: !Ref GeneralNodeGroup
+  WorkerNodeGroupName:
+    Value: !Ref WorkerNodeGroup

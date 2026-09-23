@@ -1,0 +1,33 @@
+# Indexer: 3 replicas on the general node group. Memory-heavy (OpenSearch).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wazuh-indexer
+  namespace: wazuh
+spec:
+  replicas: 3
+  template:
+    spec:
+      # general-ng has no taint; nodeSelector keeps indexers off the worker pool.
+      nodeSelector:
+        workload: general
+      containers:
+        - name: wazuh-indexer
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: 1
+              memory: 4Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: wazuh-indexer
+        namespace: wazuh
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: wazuh-storage
+        resources:
+          requests:
+            storage: 50Gi

@@ -1,0 +1,389 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Wazuh central server - IRSA IAM roles for the AWS Load Balancer Controller and
+  the EBS CSI driver. These roles let the in-cluster controllers call AWS APIs
+  (create NLBs, manage EBS volumes) via the cluster's OIDC provider.
+
+  OidcProviderArn and OidcProviderHost are passed in by deploy.sh (extracted from
+  stack 01) because the IRSA trust condition needs the issuer host WITHOUT the
+  https:// prefix, which CloudFormation cannot derive from the issuer URL alone.
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: wazuh
+  OidcProviderArn:
+    Type: String
+    Description: ARN of the cluster IAM OIDC provider (from stack 01).
+  OidcProviderHost:
+    Type: String
+    Description: >-
+      OIDC issuer host WITHOUT scheme, e.g.
+      oidc.eks.us-east-1.amazonaws.com/id/EXAMPLED539D4633E53DE1B71EXAMPLE
+  SecretName:
+    Type: String
+    Default: cdx-central-vm-auth-tokens
+    Description: Secrets Manager secret name the Wazuh cloudanix integration reads.
+  SecretValue:
+    Type: String
+    Default: '{}'
+    NoEcho: true
+    Description: >-
+      Initial secret content as a JSON object string, e.g.
+      '{"workspace_abc":"token1","workspace_def":"token2"}'.
+      Stored as the initial version; update later via the Secrets Manager console
+      or `aws secretsmanager put-secret-value`.
+  WazuhNamespace:
+    Type: String
+    Default: wazuh
+    Description: Kubernetes namespace the Wazuh managers run in.
+  WazuhServiceAccount:
+    Type: String
+    Default: wazuh-manager
+    Description: Kubernetes ServiceAccount the Wazuh managers use (IRSA subject).
+
+Resources:
+  # ---- AWS Load Balancer Controller ----
+  LBControllerPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${ClusterName}-alb-controller-policy'
+      Description: Permissions for the AWS Load Balancer Controller.
+      Tags:
+        - Key: aws-apn-id
+          Value: pc:2k1o8bijfwf7aykfulhgkc2uo
+        - Key: Created_by
+          Value: Cloudanix
+        - Key: Environment
+          Value: Prod
+        - Key: purpose
+          Value: wazuh_vm_scan
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - iam:CreateServiceLinkedRole
+              - ec2:DescribeAccountAttributes
+              - ec2:DescribeAddresses
+              - ec2:DescribeAvailabilityZones
+              - ec2:DescribeInternetGateways
+              - ec2:DescribeVpcs
+              - ec2:DescribeSubnets
+              - ec2:DescribeSecurityGroups
+              - ec2:DescribeInstances
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DescribeTags
+              - ec2:GetCoipPoolUsage
+              - ec2:DescribeCoipPools
+              - elasticloadbalancing:DescribeLoadBalancers
+              - elasticloadbalancing:DescribeLoadBalancerAttributes
+              - elasticloadbalancing:DescribeListeners
+              - elasticloadbalancing:DescribeListenerAttributes
+              - elasticloadbalancing:DescribeListenerCertificates
+              - elasticloadbalancing:DescribeSSLPolicies
+              - elasticloadbalancing:DescribeRules
+              - elasticloadbalancing:DescribeTargetGroups
+              - elasticloadbalancing:DescribeTargetGroupAttributes
+              - elasticloadbalancing:DescribeTargetHealth
+              - elasticloadbalancing:DescribeTags
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - cognito-idp:DescribeUserPoolClient
+              - acm:ListCertificates
+              - acm:DescribeCertificate
+              - iam:ListServerCertificates
+              - iam:GetServerCertificate
+              - waf-regional:GetWebACL
+              - waf-regional:GetWebACLForResource
+              - waf-regional:AssociateWebACL
+              - waf-regional:DisassociateWebACL
+              - wafv2:GetWebACL
+              - wafv2:GetWebACLForResource
+              - wafv2:AssociateWebACL
+              - wafv2:DisassociateWebACL
+              - shield:GetSubscriptionState
+              - shield:DescribeProtection
+              - shield:CreateProtection
+              - shield:DeleteProtection
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - ec2:AuthorizeSecurityGroupIngress
+              - ec2:RevokeSecurityGroupIngress
+              - ec2:CreateSecurityGroup
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - ec2:CreateTags
+            Resource: arn:aws:ec2:*:*:security-group/*
+            Condition:
+              StringEquals:
+                ec2:CreateAction: CreateSecurityGroup
+              'Null':
+                aws:RequestTag/elbv2.k8s.aws/cluster: 'false'
+          - Effect: Allow
+            Action:
+              - ec2:CreateTags
+              - ec2:DeleteTags
+            Resource: arn:aws:ec2:*:*:security-group/*
+            Condition:
+              'Null':
+                aws:RequestTag/elbv2.k8s.aws/cluster: 'true'
+                aws:ResourceTag/elbv2.k8s.aws/cluster: 'false'
+          - Effect: Allow
+            Action:
+              - ec2:AuthorizeSecurityGroupIngress
+              - ec2:RevokeSecurityGroupIngress
+              - ec2:DeleteSecurityGroup
+            Resource: '*'
+            Condition:
+              'Null':
+                aws:ResourceTag/elbv2.k8s.aws/cluster: 'false'
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:CreateLoadBalancer
+              - elasticloadbalancing:CreateTargetGroup
+            Resource: '*'
+            Condition:
+              'Null':
+                aws:RequestTag/elbv2.k8s.aws/cluster: 'false'
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:CreateListener
+              - elasticloadbalancing:DeleteListener
+              - elasticloadbalancing:CreateRule
+              - elasticloadbalancing:DeleteRule
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:AddTags
+              - elasticloadbalancing:RemoveTags
+            Resource:
+              - arn:aws:elasticloadbalancing:*:*:targetgroup/*/*
+              - arn:aws:elasticloadbalancing:*:*:loadbalancer/net/*/*
+              - arn:aws:elasticloadbalancing:*:*:loadbalancer/app/*/*
+            Condition:
+              'Null':
+                aws:RequestTag/elbv2.k8s.aws/cluster: 'true'
+                aws:ResourceTag/elbv2.k8s.aws/cluster: 'false'
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:AddTags
+              - elasticloadbalancing:RemoveTags
+            Resource:
+              - arn:aws:elasticloadbalancing:*:*:listener/net/*/*/*
+              - arn:aws:elasticloadbalancing:*:*:listener/app/*/*/*
+              - arn:aws:elasticloadbalancing:*:*:listener-rule/net/*/*/*
+              - arn:aws:elasticloadbalancing:*:*:listener-rule/app/*/*/*
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:ModifyLoadBalancerAttributes
+              - elasticloadbalancing:SetIpAddressType
+              - elasticloadbalancing:SetSecurityGroups
+              - elasticloadbalancing:SetSubnets
+              - elasticloadbalancing:DeleteLoadBalancer
+              - elasticloadbalancing:ModifyTargetGroup
+              - elasticloadbalancing:ModifyTargetGroupAttributes
+              - elasticloadbalancing:DeleteTargetGroup
+            Resource: '*'
+            Condition:
+              'Null':
+                aws:ResourceTag/elbv2.k8s.aws/cluster: 'false'
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:AddTags
+            Resource:
+              - arn:aws:elasticloadbalancing:*:*:targetgroup/*/*
+              - arn:aws:elasticloadbalancing:*:*:loadbalancer/net/*/*
+              - arn:aws:elasticloadbalancing:*:*:loadbalancer/app/*/*
+            Condition:
+              StringEquals:
+                elasticloadbalancing:CreateAction:
+                  - CreateTargetGroup
+                  - CreateLoadBalancer
+              'Null':
+                aws:RequestTag/elbv2.k8s.aws/cluster: 'false'
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:RegisterTargets
+              - elasticloadbalancing:DeregisterTargets
+            Resource: arn:aws:elasticloadbalancing:*:*:targetgroup/*/*
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:SetWebAcl
+              - elasticloadbalancing:ModifyListener
+              - elasticloadbalancing:ModifyListenerAttributes
+              - elasticloadbalancing:AddListenerCertificates
+              - elasticloadbalancing:RemoveListenerCertificates
+              - elasticloadbalancing:ModifyRule
+            Resource: '*'
+
+  LBControllerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ClusterName}-alb-controller-role'
+      # Trust policy rendered as a JSON string via Fn::Sub because the IRSA
+      # StringEquals condition keys ("<oidc-host>:aud"/":sub") are dynamic, and
+      # CloudFormation cannot use an intrinsic function as a YAML mapping key.
+      AssumeRolePolicyDocument: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": { "Federated": "${OidcProviderArn}" },
+              "Action": "sts:AssumeRoleWithWebIdentity",
+              "Condition": {
+                "StringEquals": {
+                  "${OidcProviderHost}:aud": "sts.amazonaws.com",
+                  "${OidcProviderHost}:sub": "system:serviceaccount:kube-system:aws-load-balancer-controller"
+                }
+              }
+            }
+          ]
+        }
+      ManagedPolicyArns:
+        - !Ref LBControllerPolicy
+      Tags:
+        - Key: aws-apn-id
+          Value: pc:2k1o8bijfwf7aykfulhgkc2uo
+        - Key: Created_by
+          Value: Cloudanix
+        - Key: Environment
+          Value: Prod
+        - Key: purpose
+          Value: wazuh_vm_scan
+
+  # ---- EBS CSI driver ----
+  EbsCsiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ClusterName}-ebs-csi-role'
+      AssumeRolePolicyDocument: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": { "Federated": "${OidcProviderArn}" },
+              "Action": "sts:AssumeRoleWithWebIdentity",
+              "Condition": {
+                "StringEquals": {
+                  "${OidcProviderHost}:aud": "sts.amazonaws.com",
+                  "${OidcProviderHost}:sub": "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+                }
+              }
+            }
+          ]
+        }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy
+      Tags:
+        - Key: aws-apn-id
+          Value: pc:2k1o8bijfwf7aykfulhgkc2uo
+        - Key: Created_by
+          Value: Cloudanix
+        - Key: Environment
+          Value: Prod
+        - Key: purpose
+          Value: wazuh_vm_scan
+
+  # ---- Wazuh cloudanix integration secret ----
+  CentralVmAuthTokens:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Ref SecretName
+      Description: Cloudanix VM auth tokens read by the Wazuh manager integration.
+      SecretString: !Ref SecretValue
+      Tags:
+        - Key: app
+          Value: wazuh
+        - Key: aws-apn-id
+          Value: pc:2k1o8bijfwf7aykfulhgkc2uo
+        - Key: Created_by
+          Value: Cloudanix
+        - Key: Environment
+          Value: Prod
+        - Key: purpose
+          Value: wazuh_vm_scan
+
+  # IAM role assumed (via IRSA) by the Wazuh manager pods so the cloudanix
+  # integration scripts can read the secret above. Scoped to just this secret.
+  WazuhManagerPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub '${ClusterName}-wazuh-manager-policy'
+      Description: Read-only access to the cloudanix central-vm auth-tokens secret.
+      Tags:
+        - Key: aws-apn-id
+          Value: pc:2k1o8bijfwf7aykfulhgkc2uo
+        - Key: Created_by
+          Value: Cloudanix
+        - Key: Environment
+          Value: Prod
+        - Key: purpose
+          Value: wazuh_vm_scan
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+            Resource: !Ref CentralVmAuthTokens
+
+  WazuhManagerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ClusterName}-wazuh-manager-role'
+      # IRSA trust: only the wazuh-manager ServiceAccount in the wazuh namespace
+      # may assume this role. Trust policy is a JSON string because the OIDC
+      # condition keys are dynamic (see LBControllerRole for the same pattern).
+      AssumeRolePolicyDocument: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": { "Federated": "${OidcProviderArn}" },
+              "Action": "sts:AssumeRoleWithWebIdentity",
+              "Condition": {
+                "StringEquals": {
+                  "${OidcProviderHost}:aud": "sts.amazonaws.com",
+                  "${OidcProviderHost}:sub": "system:serviceaccount:${WazuhNamespace}:${WazuhServiceAccount}"
+                }
+              }
+            }
+          ]
+        }
+      ManagedPolicyArns:
+        - !Ref WazuhManagerPolicy
+      Tags:
+        - Key: aws-apn-id
+          Value: pc:2k1o8bijfwf7aykfulhgkc2uo
+        - Key: Created_by
+          Value: Cloudanix
+        - Key: Environment
+          Value: Prod
+        - Key: purpose
+          Value: wazuh_vm_scan
+
+Outputs:
+  LBControllerRoleArn:
+    Value: !GetAtt LBControllerRole.Arn
+    Export:
+      Name: !Sub '${ClusterName}-alb-controller-role-arn'
+  EbsCsiRoleArn:
+    Value: !GetAtt EbsCsiRole.Arn
+    Export:
+      Name: !Sub '${ClusterName}-ebs-csi-role-arn'
+  WazuhManagerRoleArn:
+    Value: !GetAtt WazuhManagerRole.Arn
+    Export:
+      Name: !Sub '${ClusterName}-wazuh-manager-role-arn'
+  SecretArn:
+    Value: !Ref CentralVmAuthTokens
+    Export:
+      Name: !Sub '${ClusterName}-central-vm-secret-arn'
