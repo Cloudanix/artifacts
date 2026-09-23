@@ -39,12 +39,12 @@ Resources:
 
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
@@ -55,12 +55,12 @@ Resources:
 
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
   AttachIGW:
     Type: AWS::EC2::VPCGatewayAttachment
@@ -82,12 +82,12 @@ Resources:
 
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
   PublicSubnet2:
     Type: AWS::EC2::Subnet
@@ -102,12 +102,12 @@ Resources:
 
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -119,12 +119,12 @@ Resources:
 
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
   PublicRoute:
     Type: AWS::EC2::Route
@@ -156,12 +156,12 @@ Resources:
           Value: wazuh-test-nat-eip
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
   NatGateway:
     Type: AWS::EC2::NatGateway
@@ -174,12 +174,12 @@ Resources:
 
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
   # ---- Private subnets (2 AZs — EKS requirement) ----
   PrivateSubnet1:
@@ -194,12 +194,12 @@ Resources:
 
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
@@ -213,12 +213,12 @@ Resources:
 
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
@@ -230,12 +230,12 @@ Resources:
 
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
   PrivateRoute:
     Type: AWS::EC2::Route

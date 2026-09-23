@@ -32,7 +32,7 @@ metadata:
     service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
     service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
     service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: tcp
-    service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "aws-apn-id=pc:2k1o8bijfwf7aykfulhgkc2uo,Created_by=Cloudanix,Environment=Prod,purpose=wazuh_vm_scan"
+    service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "aws-apn-id=pc:2k1o8bijfwf7aykfulhgkc2uo,asset-owner=Cloudanix,asset-service=CloudSecurity,asset-purpose=Security-Monitoring"
 spec:
   loadBalancerClass: service.k8s.aws/nlb
 ---
@@ -48,7 +48,7 @@ metadata:
     service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
     service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
     service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: tcp
-    service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "aws-apn-id=pc:2k1o8bijfwf7aykfulhgkc2uo,Created_by=Cloudanix,Environment=Prod,purpose=wazuh_vm_scan"
+    service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "aws-apn-id=pc:2k1o8bijfwf7aykfulhgkc2uo,asset-owner=Cloudanix,asset-service=CloudSecurity,asset-purpose=Security-Monitoring"
 spec:
   loadBalancerClass: service.k8s.aws/nlb
 ---
@@ -60,7 +60,7 @@ metadata:
   name: dashboard
   namespace: wazuh
   annotations:
-    service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "aws-apn-id=pc:2k1o8bijfwf7aykfulhgkc2uo,Created_by=Cloudanix,Environment=Prod,purpose=wazuh_vm_scan"
+    service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "aws-apn-id=pc:2k1o8bijfwf7aykfulhgkc2uo,asset-owner=Cloudanix,asset-service=CloudSecurity,asset-purpose=Security-Monitoring"
 ---
 apiVersion: v1
 kind: Service
@@ -68,4 +68,4 @@ metadata:
   name: indexer
   namespace: wazuh
   annotations:
-    service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "aws-apn-id=pc:2k1o8bijfwf7aykfulhgkc2uo,Created_by=Cloudanix,Environment=Prod,purpose=wazuh_vm_scan"
+    service.beta.kubernetes.io/aws-load-balancer-additional-resource-tags: "aws-apn-id=pc:2k1o8bijfwf7aykfulhgkc2uo,asset-owner=Cloudanix,asset-service=CloudSecurity,asset-purpose=Security-Monitoring"

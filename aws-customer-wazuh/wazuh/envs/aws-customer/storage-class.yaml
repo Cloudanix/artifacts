@@ -19,9 +19,9 @@ parameters:
   type: gp3
   encrypted: 'true'
   tagSpecification_1: "aws-apn-id=pc:2k1o8bijfwf7aykfulhgkc2uo"
-  tagSpecification_2: "Created_by=Cloudanix"
-  tagSpecification_3: "Environment=Prod"
-  tagSpecification_4: "purpose=wazuh_vm_scan"
+  tagSpecification_2: "asset-owner=Cloudanix"
+  tagSpecification_3: "asset-service=CloudSecurity"
+  tagSpecification_4: "asset-purpose=Security-Monitoring"
 volumeBindingMode: WaitForFirstConsumer
 reclaimPolicy: Retain
 allowVolumeExpansion: true

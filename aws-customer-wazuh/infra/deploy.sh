@@ -7,7 +7,7 @@
 # CSI driver and the AWS Load Balancer Controller, and writes kubeconfig.
 #
 # Idempotent: re-running deploys updates in place and resumes.
-# Ownership tags (aws-apn-id, Created_by, Environment, purpose) live in
+# Ownership tags (aws-apn-id, asset-owner, asset-service, asset-purpose) live in
 # common-tags.sh and are applied to CFN stacks, VPC/subnets, and NLBs.
 #
 # Usage:

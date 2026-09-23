@@ -52,12 +52,12 @@ Resources:
       Tags:
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -249,12 +249,12 @@ Resources:
       Tags:
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
   # ---- EBS CSI driver ----
   EbsCsiRole:
@@ -283,12 +283,12 @@ Resources:
       Tags:
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
   # ---- Wazuh cloudanix integration secret ----
   CentralVmAuthTokens:
@@ -302,12 +302,12 @@ Resources:
           Value: wazuh
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
   # IAM role assumed (via IRSA) by the Wazuh manager pods so the cloudanix
   # integration scripts can read the secret above. Scoped to just this secret.
@@ -319,12 +319,12 @@ Resources:
       Tags:
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -363,12 +363,12 @@ Resources:
       Tags:
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
 Outputs:
   LBControllerRoleArn:

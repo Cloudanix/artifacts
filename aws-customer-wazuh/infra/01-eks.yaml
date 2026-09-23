@@ -55,12 +55,12 @@ Resources:
       Tags:
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
   ClusterSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -72,12 +72,12 @@ Resources:
           Value: !Sub '${ClusterName}-cluster-sg'
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
   Cluster:
     Type: AWS::EKS::Cluster
@@ -102,12 +102,12 @@ Resources:
       Tags:
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
   # IAM OIDC provider for IRSA. Required by the LB Controller + EBS CSI roles.
   OIDCProvider:
@@ -122,12 +122,12 @@ Resources:
       Tags:
         - Key: aws-apn-id
           Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: Created_by
+        - Key: asset-owner
           Value: Cloudanix
-        - Key: Environment
-          Value: Prod
-        - Key: purpose
-          Value: wazuh_vm_scan
+        - Key: asset-service
+          Value: CloudSecurity
+        - Key: asset-purpose
+          Value: Security-Monitoring
 
 Outputs:
   ClusterName:
