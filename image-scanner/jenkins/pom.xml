@@ -4,7 +4,7 @@
   <parent>
     <groupId>org.jenkins-ci.plugins</groupId>
     <artifactId>plugin</artifactId>
-    <version>4.65</version>
+    <version>5.31</version>
     <relativePath />
   </parent>
   <groupId>io.jenkins.plugins</groupId>
@@ -30,47 +30,30 @@
     <changelist>-SNAPSHOT</changelist>
 
     <!-- https://www.jenkins.io/doc/developer/plugin-development/choosing-jenkins-baseline/ -->
-    <jenkins.version>2.387.3</jenkins.version>
+    <!-- 2.479.3 is the last LTS of the first line that requires Java 17 -->
+    <jenkins.version>2.479.3</jenkins.version>
+    <maven.compiler.release>17</maven.compiler.release>
+    <!-- Parent 5.31's default hpi plugin still emits JUnit 3 InjectedTest; JTH 2537 dropped PluginAutomaticTestBuilder. -->
+    <hpi-plugin.version>3.1814.v77d15159f9b_d</hpi-plugin.version>
     <gitHubRepo>jenkinsci/${project.artifactId}-plugin</gitHubRepo>
     <spotless.check.skip>false</spotless.check.skip>
+    <!-- The build step shells out to `docker run`, so the HPI must bundle no third-party jars. -->
+    <hpi.strictBundledArtifacts>true</hpi.strictBundledArtifacts>
   </properties>
-  <build>
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-jar-plugin</artifactId>
-                <version>${maven-jar-plugin.version}</version>
-                <configuration>
-                    <archive>
-                        <manifest>
-                            <mainClass>io.jenkins.plugins.cloudanix.ImageScannerBuilder</mainClass>
-                        </manifest>
-                    </archive>
-                </configuration>
-            </plugin>
-            <!-- Add other plugins if needed -->
-        </plugins>
-    </build>
 
   <dependencyManagement>
     <dependencies>
       <dependency>
         <!-- Pick up common dependencies for the selected LTS line: https://github.com/jenkinsci/bom#usage -->
         <groupId>io.jenkins.tools.bom</groupId>
-        <artifactId>bom-2.387.x</artifactId>
-        <version>2133.v2e6c00fe4d61</version>
+        <artifactId>bom-2.479.x</artifactId>
+        <version>5054.v620b_5d2b_d5e6</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
     </dependencies>
   </dependencyManagement>
   <dependencies>
-    <dependency>
-      <groupId>com.github.docker-java</groupId>
-      <artifactId>docker-java</artifactId>
-      <version>3.3.2</version>
-      <!-- Use the latest version available -->
-    </dependency>
     <dependency>
       <groupId>org.jenkins-ci.plugins</groupId>
       <artifactId>structs</artifactId>
