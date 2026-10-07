@@ -6,6 +6,7 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_OVERLAY="${ROOT}/envs/aws-customer"
 FORWARD_OVERLAY="${ROOT}/envs/aws-customer-forward"
+S3_OVERLAY="${ROOT}/envs/aws-customer-s3"
 TEMPLATE_CONF="${FORWARD_OVERLAY}/60-wazuh-archives.conf"
 WORKER_CONF_SRC="${ROOT}/base/wazuh_managers/wazuh_conf/worker.conf"
 
@@ -13,6 +14,7 @@ MASTER_IMAGE="public.ecr.aws/cloudanix/wazuh-master-custom"
 WORKER_IMAGE="public.ecr.aws/cloudanix/wazuh-worker-custom"
 
 FORWARD=0
+S3=0
 DRY_RUN=0
 SKIP_SA=0
 CLUSTER_NAME="${CLUSTER_NAME:-wazuh}"
@@ -20,6 +22,9 @@ NAMESPACE="${NAMESPACE:-wazuh}"
 WAZUH_SA="${WAZUH_SA:-wazuh-manager}"
 TARGET_IP="${TARGET_IP:-}"
 FORWARD_PORT="${FORWARD_PORT:-514}"
+S3_BUCKET="${S3_BUCKET:-}"
+S3_PREFIX="${S3_PREFIX:-wazuh-archives}"
+S3_SPOOL_DIR="${S3_SPOOL_DIR:-/var/ossec/logs/s3-spool}"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 MASTER_TAG="${MASTER_TAG:-}"
@@ -35,6 +40,9 @@ Options:
   --forward              Apply envs/aws-customer-forward (archive syslog)
   --target IP            Forward destination (required with --forward)
   --port N               Forward port (default: 514)
+  --s3                   Apply envs/aws-customer-s3 (archives to S3)
+  --bucket NAME          S3 bucket (required with --s3)
+  --s3-prefix P          Key prefix in the bucket (default: wazuh-archives)
   --image-registry R     Registry prefix for master/worker images
   --image-tag TAG        Tag for both images
   --master-tag TAG       Tag for wazuh-master-custom
@@ -43,8 +51,12 @@ Options:
   --skip-sa              Do not create/annotate the wazuh-manager ServiceAccount
   -h, --help             Show this help
 
-Params file (optional): ${FORWARD_OVERLAY}/forward.params
+Params files (optional): ${FORWARD_OVERLAY}/forward.params
+                         ${S3_OVERLAY}/s3.params
 Flags override sourced values.
+
+--forward and --s3 are mutually exclusive: both overlays claim
+/etc/rsyslog.d/60-wazuh-archives.conf.
 EOF
 }
 
@@ -52,6 +64,12 @@ PARAMS_FILE="${FORWARD_OVERLAY}/forward.params"
 if [[ -f "${PARAMS_FILE}" ]]; then
   # shellcheck disable=SC1090
   source "${PARAMS_FILE}"
+fi
+
+S3_PARAMS_FILE="${S3_OVERLAY}/s3.params"
+if [[ -f "${S3_PARAMS_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  source "${S3_PARAMS_FILE}"
 fi
 
 while [[ $# -gt 0 ]]; do
@@ -66,6 +84,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --port)
       FORWARD_PORT="${2:?--port requires a port number}"
+      shift 2
+      ;;
+    --s3)
+      S3=1
+      shift
+      ;;
+    --bucket)
+      S3_BUCKET="${2:?--bucket requires a bucket name}"
+      shift 2
+      ;;
+    --s3-prefix)
+      S3_PREFIX="${2:?--s3-prefix requires a prefix}"
       shift 2
       ;;
     --image-registry)
@@ -105,9 +135,20 @@ while [[ $# -gt 0 ]]; do
 done
 
 FORWARD_PORT="${FORWARD_PORT:-514}"
+S3_PREFIX="${S3_PREFIX%/}"
+
+if [[ "${FORWARD}" -eq 1 && "${S3}" -eq 1 ]]; then
+  echo "error: --forward and --s3 are mutually exclusive" >&2
+  exit 1
+fi
 
 if [[ "${FORWARD}" -eq 1 && -z "${TARGET_IP:-}" ]]; then
   echo "error: --forward requires --target or TARGET_IP" >&2
+  exit 1
+fi
+
+if [[ "${S3}" -eq 1 && -z "${S3_BUCKET:-}" ]]; then
+  echo "error: --s3 requires --bucket or S3_BUCKET" >&2
   exit 1
 fi
 
@@ -184,6 +225,9 @@ set_images() {
   if [[ "${overlay}" == "${FORWARD_OVERLAY}" ]]; then
     cp -a "${FORWARD_OVERLAY}" "${workdir}/envs/aws-customer-forward"
   fi
+  if [[ "${overlay}" == "${S3_OVERLAY}" ]]; then
+    cp -a "${S3_OVERLAY}" "${workdir}/envs/aws-customer-s3"
+  fi
 
   dest="${workdir}${overlay#"${ROOT}"}"
   master_tag="${MASTER_TAG:-${IMAGE_TAG:-}}"
@@ -213,6 +257,39 @@ generate_forward() {
   sed -e "s|__FORWARD_TARGET__|${TARGET_IP}|g" \
       -e "s|__FORWARD_PORT__|${FORWARD_PORT}|g" \
       "${TEMPLATE_CONF}" > "${gen}/60-wazuh-archives.conf"
+  sed -E "s/(<logall(_json)?>)no(<\/logall(_json)?>)/\1yes\3/g" \
+      "${WORKER_CONF_SRC}" > "${gen}/worker.conf"
+}
+
+generate_s3() {
+  local gen="${S3_OVERLAY}/generated"
+  local tpl="${S3_OVERLAY}/templates"
+  local region
+  mkdir -p "${gen}"
+  for f in 60-wazuh-archives.conf cloudanix-s3-archive-upload.py; do
+    if [[ ! -f "${tpl}/${f}" ]]; then
+      echo "error: missing template ${tpl}/${f}" >&2
+      exit 1
+    fi
+  done
+  if [[ ! -f "${WORKER_CONF_SRC}" ]]; then
+    echo "error: missing ${WORKER_CONF_SRC}" >&2
+    exit 1
+  fi
+  # boto3 under cron gets AWS_REGION from cloudanix-aws-exports.sh, but bake the
+  # region in too so the uploader still works when run by hand.
+  region="${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get region 2>/dev/null || true)}}"
+  if [[ -z "${region}" ]]; then
+    echo "error: --s3 needs a region; export AWS_REGION" >&2
+    exit 1
+  fi
+  sed -e "s|__SPOOL_DIR__|${S3_SPOOL_DIR}|g" \
+      "${tpl}/60-wazuh-archives.conf" > "${gen}/60-wazuh-archives.conf"
+  sed -e "s|__S3_BUCKET__|${S3_BUCKET}|g" \
+      -e "s|__S3_PREFIX__|${S3_PREFIX}|g" \
+      -e "s|__AWS_REGION__|${region}|g" \
+      -e "s|__SPOOL_DIR__|${S3_SPOOL_DIR}|g" \
+      "${tpl}/cloudanix-s3-archive-upload.py" > "${gen}/cloudanix-s3-archive-upload.py"
   sed -E "s/(<logall(_json)?>)no(<\/logall(_json)?>)/\1yes\3/g" \
       "${WORKER_CONF_SRC}" > "${gen}/worker.conf"
 }
@@ -254,20 +331,21 @@ run_apply() {
   fi
 }
 
-cleanup_apply_workdir() {
-  local path="${APPLY_PATH:-}" workdir
-  [[ -n "$path" ]] || return 0
-  workdir="${path%%/envs/*}"
-  [[ -n "$workdir" && "$workdir" != "$path" ]] && rm -r "$workdir"
-}
-trap cleanup_apply_workdir EXIT
-
 ensure_service_account
 
 if [[ "${FORWARD}" -eq 1 ]]; then
   generate_forward
   APPLY_PATH="$(set_images "${FORWARD_OVERLAY}")"
   run_apply "${APPLY_PATH}"
+  echo
+  echo "Workers will not pick up generated worker.conf / rsyslog drop-in until restarted:"
+  echo "  kubectl rollout restart statefulset/wazuh-manager-worker -n wazuh"
+elif [[ "${S3}" -eq 1 ]]; then
+  generate_s3
+  APPLY_PATH="$(set_images "${S3_OVERLAY}")"
+  run_apply "${APPLY_PATH}"
+  echo
+  echo "Archives -> s3://${S3_BUCKET}/${S3_PREFIX}/<pod>/<date>/<hour>/<minute>.json"
   echo
   echo "Workers will not pick up generated worker.conf / rsyslog drop-in until restarted:"
   echo "  kubectl rollout restart statefulset/wazuh-manager-worker -n wazuh"

@@ -1,0 +1,38 @@
+# Optional overlay: raw archive events from Wazuh workers to S3.
+#
+# Do NOT apply this for every customer. Default deploy is still:
+#   kubectl apply -k ../aws-customer
+#
+# Mutually exclusive with envs/aws-customer-forward -- both claim
+# /etc/rsyslog.d/60-wazuh-archives.conf. Pick syslog forwarding or S3, not both.
+#
+# Enable for a customer that wants archives in their own bucket:
+#   ../../infra/setup-s3-archive.sh --bucket <name>     # AWS half
+#   ../../apply.sh --s3 --bucket <name>                 # cluster half
+#
+# apply.sh fills generated/ from templates/ (bucket, prefix, region, logall
+# worker.conf) then applies this overlay. generated/ is gitignored.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: wazuh
+
+resources:
+  - ../aws-customer
+
+configMapGenerator:
+  - name: wazuh-s3-archive
+    options:
+      disableNameSuffixHash: true
+    files:
+      - 60-wazuh-archives.conf=generated/60-wazuh-archives.conf
+      - cloudanix-s3-archive-upload.py=generated/cloudanix-s3-archive-upload.py
+  - name: wazuh-conf
+    behavior: merge
+    files:
+      - worker.conf=generated/worker.conf
+
+patchesStrategicMerge:
+  - worker-sts-s3.yaml
+  - cron-jobs-s3.yaml

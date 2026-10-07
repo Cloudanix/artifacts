@@ -1,0 +1,18 @@
+# Add the per-minute S3 upload to the worker crontab.
+#
+# Strategic merge replaces the whole worker-crontab key, so this must stay a
+# superset of base/wazuh_managers/wazuh-integration-cron-jobs-cm.yaml. Keep the
+# two in sync when either changes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wazuh-integration-cron-jobs
+  namespace: wazuh
+data:
+  worker-crontab: |
+    # Wazuh Worker Cron Jobs
+    SHELL=/bin/bash
+    BASH_ENV=/var/ossec/etc/cloudanix-aws-exports.sh
+    */1 * * * * /var/ossec/etc/cloudanix-cron-run.sh /var/ossec/integrations/cloudanix-push-alerts.py
+    */1 * * * * /var/ossec/etc/cloudanix-cron-run.sh /var/ossec/integrations/cloudanix-s3-archive-upload.py
+    0 */12 * * * : > /var/ossec/logs/archives/archives.json

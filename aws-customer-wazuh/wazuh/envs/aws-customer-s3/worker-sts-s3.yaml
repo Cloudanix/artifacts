@@ -1,0 +1,31 @@
+# Mount the S3 archive drop-in and uploader into the worker pods.
+#
+# start-worker.sh starts rsyslogd only when 60-wazuh-archives.conf is present,
+# so mounting it is what switches archiving on. The uploader lands in
+# /var/ossec/integrations alongside the other cloudanix cron scripts.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wazuh-manager-worker
+  namespace: wazuh
+spec:
+  template:
+    spec:
+      volumes:
+        - name: wazuh-s3-archive
+          configMap:
+            name: wazuh-s3-archive
+            # 0o555: cron execs the uploader as the wazuh user (see
+            # wazuh-integration-scripts for why "other" needs read+execute).
+            defaultMode: 0o555
+      containers:
+        - name: wazuh-manager
+          volumeMounts:
+            - name: wazuh-s3-archive
+              mountPath: /etc/rsyslog.d/60-wazuh-archives.conf
+              subPath: 60-wazuh-archives.conf
+              readOnly: true
+            - name: wazuh-s3-archive
+              mountPath: /var/ossec/integrations/cloudanix-s3-archive-upload.py
+              subPath: cloudanix-s3-archive-upload.py
+              readOnly: true
