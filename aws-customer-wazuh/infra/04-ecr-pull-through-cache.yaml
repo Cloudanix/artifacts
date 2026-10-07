@@ -59,15 +59,6 @@ Resources:
       Description: >-
         Allows EKS nodes to populate the ECR pull-through cache from the ECR Public
         upstream on first pull of the Cloudanix Wazuh images.
-      Tags:
-        - Key: aws-apn-id
-          Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: asset-owner
-          Value: Cloudanix
-        - Key: asset-service
-          Value: CloudSecurity
-        - Key: asset-purpose
-          Value: Security-Monitoring
       Roles:
         - !Ref NodeInstanceRoleName
       PolicyDocument:

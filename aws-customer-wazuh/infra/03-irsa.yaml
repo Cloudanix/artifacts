@@ -49,15 +49,6 @@ Resources:
     Properties:
       ManagedPolicyName: !Sub '${ClusterName}-alb-controller-policy'
       Description: Permissions for the AWS Load Balancer Controller.
-      Tags:
-        - Key: aws-apn-id
-          Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: asset-owner
-          Value: Cloudanix
-        - Key: asset-service
-          Value: CloudSecurity
-        - Key: asset-purpose
-          Value: Security-Monitoring
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -316,15 +307,6 @@ Resources:
     Properties:
       ManagedPolicyName: !Sub '${ClusterName}-wazuh-manager-policy'
       Description: Read-only access to the cloudanix central-vm auth-tokens secret.
-      Tags:
-        - Key: aws-apn-id
-          Value: pc:2k1o8bijfwf7aykfulhgkc2uo
-        - Key: asset-owner
-          Value: Cloudanix
-        - Key: asset-service
-          Value: CloudSecurity
-        - Key: asset-purpose
-          Value: Security-Monitoring
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
