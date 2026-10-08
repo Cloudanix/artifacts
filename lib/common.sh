@@ -25,16 +25,16 @@ _CDX_COMMON_LOADED="true"
 # =============================================================================
 # All created resources are tagged with a consistent set. The purpose value is
 # product-specific and set via CDX_PURPOSE (e.g. jit_db, jit_k8s, jit_vm).
-# Environment is hardcoded to Prod.
+# Asset classification tags (asset-owner/asset-service/asset-purpose) are fixed.
 #
 # Different AWS CLI commands need different tag formats — these helpers emit
 # the right shape:
 #   cdx_tags_ec2   → for --tag-specifications inner Tags list (EC2/VPC/EFS specs)
-#                    "{Key=Environment,Value=Prod},{Key=Created_by,Value=Cloudanix},..."
+#                    "{Key=asset-owner,Value=Cloudanix},{Key=asset-service,Value=CloudSecurity},..."
 #   cdx_tags_kv    → for --tags on IAM/EFS/Secrets (space-separated Key=..,Value=..)
-#                    "Key=Environment,Value=Prod Key=Created_by,Value=Cloudanix ..."
+#                    "Key=asset-owner,Value=Cloudanix Key=asset-service,Value=CloudSecurity ..."
 #   cdx_tags_ecs   → for ECS --tags (lowercase key/value)
-#                    "key=Environment,value=Prod key=Created_by,value=Cloudanix ..."
+#                    "key=asset-owner,value=Cloudanix key=asset-service,value=CloudSecurity ..."
 #   cdx_tags_json  → JSON array [{"Key":..,"Value":..}, ...]  (task defs, some APIs)
 #   cdx_tags_json_lc → JSON array with lowercase key/value (ECS task-def "tags")
 # =============================================================================
@@ -49,23 +49,23 @@ CDX_APN_ID="${CDX_APN_ID:-pc:2k1o8bijfwf7aykfulhgkc2uo}"
 
 cdx_tags_ec2() {
     local extra="${1:-}"  # optional leading "{Key=Name,Value=x}," prefix caller can pass
-    echo "${extra}{Key=Environment,Value=Prod},{Key=Created_by,Value=Cloudanix},{Key=purpose,Value=$(cdx_purpose)},{Key=aws-apn-id,Value=${CDX_APN_ID}}"
+    echo "${extra}{Key=asset-owner,Value=Cloudanix},{Key=asset-service,Value=CloudSecurity},{Key=asset-purpose,Value=Security-Monitoring},{Key=purpose,Value=$(cdx_purpose)},{Key=aws-apn-id,Value=${CDX_APN_ID}}"
 }
 
 cdx_tags_kv() {
-    echo "Key=Environment,Value=Prod Key=Created_by,Value=Cloudanix Key=purpose,Value=$(cdx_purpose) Key=aws-apn-id,Value=${CDX_APN_ID}"
+    echo "Key=asset-owner,Value=Cloudanix Key=asset-service,Value=CloudSecurity Key=asset-purpose,Value=Security-Monitoring Key=purpose,Value=$(cdx_purpose) Key=aws-apn-id,Value=${CDX_APN_ID}"
 }
 
 cdx_tags_ecs() {
-    echo "key=Environment,value=Prod key=Created_by,value=Cloudanix key=purpose,value=$(cdx_purpose) key=aws-apn-id,value=${CDX_APN_ID}"
+    echo "key=asset-owner,value=Cloudanix key=asset-service,value=CloudSecurity key=asset-purpose,value=Security-Monitoring key=purpose,value=$(cdx_purpose) key=aws-apn-id,value=${CDX_APN_ID}"
 }
 
 cdx_tags_json() {
-    printf '[{"Key":"Environment","Value":"Prod"},{"Key":"Created_by","Value":"Cloudanix"},{"Key":"purpose","Value":"%s"},{"Key":"aws-apn-id","Value":"%s"}]' "$(cdx_purpose)" "$CDX_APN_ID"
+    printf '[{"Key":"asset-owner","Value":"Cloudanix"},{"Key":"asset-service","Value":"CloudSecurity"},{"Key":"asset-purpose","Value":"Security-Monitoring"},{"Key":"purpose","Value":"%s"},{"Key":"aws-apn-id","Value":"%s"}]' "$(cdx_purpose)" "$CDX_APN_ID"
 }
 
 cdx_tags_json_lc() {
-    printf '[{"key":"Environment","value":"Prod"},{"key":"Created_by","value":"Cloudanix"},{"key":"purpose","value":"%s"},{"key":"aws-apn-id","value":"%s"}]' "$(cdx_purpose)" "$CDX_APN_ID"
+    printf '[{"key":"asset-owner","value":"Cloudanix"},{"key":"asset-service","value":"CloudSecurity"},{"key":"asset-purpose","value":"Security-Monitoring"},{"key":"purpose","value":"%s"},{"key":"aws-apn-id","value":"%s"}]' "$(cdx_purpose)" "$CDX_APN_ID"
 }
 
 # =============================================================================

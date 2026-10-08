@@ -124,6 +124,7 @@ CONFIG_FIELDS=(
     "PRIVATE_SUBNET_1_ID|nonempty||Private Subnet 1 ID|existing-vpc,same-account|false"
     "PRIVATE_SUBNET_2_ID|nonempty||Private Subnet 2 ID|existing-vpc,same-account|false"
     "SETUP_NUMBER|nonempty|2|Setup Number (for multi-VPC in same account)|same-account|false"
+    "ECS_TASK_ROLE_NAME|nonempty|ECSTaskRole|Existing IAM Role name (used as ECS execution + task role)|same-account|false"
     "SETUP_PEERING|boolean|true|Set up VPC peering? (true/false — false = role + SG whitelist only)|onboard-new-account|false"
     "HUB_VPC_ID|nonempty|__AUTO_HUB_VPC__|JIT hub VPC ID (auto-detected — confirm or override)|onboard-new-account|false"
     "HUB_VPC_CIDR|cidr|__AUTO_HUB_CIDR__|JIT hub VPC CIDR (auto-detected — the requester/hub CIDR)|onboard-peered,onboard-new-account|false"

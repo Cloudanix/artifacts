@@ -74,7 +74,7 @@ if [[ "$SETUP_PEERING" == "true" ]]; then
             --peer-owner-id "$DB_ACCOUNT_ID" \
             --peer-vpc-id "$DB_VPC_ID" \
             --peer-region "$AWS_REGION" \
-            --tag-specifications "ResourceType=vpc-peering-connection,Tags=[{Key=Name,Value=cdx-jit-db-peering-${DB_VPC_ID}},{Key=Purpose,Value=db-jit},{Key=Environment,Value=Prod},{Key=Created_by,Value=Cloudanix},{Key=purpose,Value=jit_db},{Key=aws-apn-id,Value=${CDX_APN_ID}}]" \
+            --tag-specifications "ResourceType=vpc-peering-connection,Tags=[{Key=Name,Value=cdx-jit-db-peering-${DB_VPC_ID}},{Key=Purpose,Value=db-jit},{Key=asset-owner,Value=Cloudanix},{Key=asset-service,Value=CloudSecurity},{Key=asset-purpose,Value=Security-Monitoring},{Key=purpose,Value=jit_db},{Key=aws-apn-id,Value=${CDX_APN_ID}}]" \
             --query 'VpcPeeringConnection.VpcPeeringConnectionId' --output text)
 
         if [[ -z "$PEERING_ID" || "$PEERING_ID" == "None" ]]; then

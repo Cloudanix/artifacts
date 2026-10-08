@@ -41,7 +41,8 @@ export CDX_PURPOSE=jit_db
 
 require_env AWS_REGION PROJECT_NAME BUCKET_NAME SECRET_NAME \
     CDX_AUTH_TOKEN CDX_SIGNATURE_SECRET_KEY CDX_SENTRY_DSN CDX_DC CDX_API_BASE \
-    ENABLE_DAM ENCRYPTION_KEY VPC_ID PRIVATE_SUBNET_1_ID PRIVATE_SUBNET_2_ID SETUP_NUMBER
+    ENABLE_DAM ENCRYPTION_KEY VPC_ID PRIVATE_SUBNET_1_ID PRIVATE_SUBNET_2_ID SETUP_NUMBER \
+    ECS_TASK_ROLE_NAME
 
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 
@@ -52,7 +53,9 @@ IMAGE_TAG="${IMAGE_TAG:-latest}"
 ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
 export AWS_DEFAULT_REGION="$AWS_REGION"
 
-ROLE_NAME="${PROJECT_NAME}-ECSRole"
+# Role name is taken as input (existing role in the customer account). It is
+# used as BOTH the ECS execution role and the task role in every task def.
+ROLE_NAME="${ECS_TASK_ROLE_NAME}"
 ECR_PREFIX="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 ECS_CLUSTER_NAME="${PROJECT_NAME}-cluster-${SETUP_NUMBER}"
 NAMESPACE_NAME="proxysql-proxyserver-${SETUP_NUMBER}"
@@ -81,6 +84,7 @@ TD_POSTGRESQL="postgresql-task-${SETUP_NUMBER}"
 info "Account: $ACCOUNT_ID | Region: $AWS_REGION | Project: $PROJECT_NAME"
 info "Setup #${SETUP_NUMBER} | Cluster: $ECS_CLUSTER_NAME | Namespace: $NAMESPACE_NAME"
 info "VPC: $VPC_ID | Subnets: $PRIVATE_SUBNET_1_ID, $PRIVATE_SUBNET_2_ID"
+info "IAM role (exec + task): $ROLE_NAME"
 
 info "Image source mode: ${CDX_ECR_MODE:-pull-through}"
 
@@ -99,7 +103,7 @@ if [[ "${CDX_ECR_MODE:-pull-through}" != "sync" ]]; then
     if aws iam get-role --role-name "$ROLE_NAME" > /dev/null 2>&1; then
         cdx_attach_pull_through_iam "$ROLE_NAME"
     else
-        warn "Role $ROLE_NAME not found — skipping pull-through IAM attach (verify first setup ran)"
+        warn "Role $ROLE_NAME not found — skipping pull-through IAM attach (check ECS_TASK_ROLE_NAME)"
     fi
 fi
 
@@ -174,7 +178,7 @@ extend_policy() {
 step "Verify IAM Role"
 ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text 2>/dev/null) || ROLE_ARN=""
 if [[ -z "$ROLE_ARN" ]]; then
-    error "IAM Role '$ROLE_NAME' does not exist. Run the first setup before adding additional setups."
+    error "IAM Role '$ROLE_NAME' does not exist. Provide an existing role via ECS_TASK_ROLE_NAME (used as ECS execution + task role)."
     exit 1
 fi
 ok "IAM Role exists: $ROLE_NAME ($ROLE_ARN)"
