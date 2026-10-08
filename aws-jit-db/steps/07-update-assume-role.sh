@@ -32,7 +32,10 @@ DB_ACCOUNT_ID="${DB_ACCOUNT_ID:-$ACCOUNT_ID}"
 # =============================================================================
 
 PROJECT_NAME="${PROJECT_NAME:-cdx-jit-db}"
-ECS_ROLE_NAME="${PROJECT_NAME}-ECSRole"
+# Prefer the role provided to the install step (ECS_TASK_ROLE_NAME, used as the
+# ECS execution + task role). Fall back to the legacy derived name for scopes
+# that don't collect that input.
+ECS_ROLE_NAME="${ECS_TASK_ROLE_NAME:-${PROJECT_NAME}-ECSRole}"
 POLICY_NAME="cdx-ECSRDSAssumeRolePolicy"
 
 info "JIT Account: $ACCOUNT_ID | DB Account: $DB_ACCOUNT_ID"
@@ -45,7 +48,7 @@ info "ECS Role: $ECS_ROLE_NAME"
 step "Validate ECS Role"
 ROLE_ARN=$(aws iam get-role --role-name "$ECS_ROLE_NAME" --query 'Role.Arn' --output text 2>/dev/null) || ROLE_ARN=""
 if [[ -z "$ROLE_ARN" ]]; then
-    error "ECS Role $ECS_ROLE_NAME not found. Run step 02 first."; exit 1
+    error "ECS Role $ECS_ROLE_NAME not found. Check ECS_TASK_ROLE_NAME (or run step 02 first)."; exit 1
 fi
 ok "ECS Role: $ECS_ROLE_NAME ($ROLE_ARN)"
 
