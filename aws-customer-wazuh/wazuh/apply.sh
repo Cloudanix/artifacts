@@ -17,6 +17,7 @@ FORWARD=0
 S3=0
 DRY_RUN=0
 SKIP_SA=0
+RESET_IMAGES=0
 CLUSTER_NAME="${CLUSTER_NAME:-wazuh}"
 NAMESPACE="${NAMESPACE:-wazuh}"
 WAZUH_SA="${WAZUH_SA:-wazuh-manager}"
@@ -47,6 +48,8 @@ Options:
   --image-tag TAG        Tag for both images
   --master-tag TAG       Tag for wazuh-master-custom
   --worker-tag TAG       Tag for wazuh-worker-custom
+  --reset-images         Use the overlay's pinned registry/tag instead of
+                         inheriting what is already deployed
   --dry-run              kubectl apply --dry-run=client
   --skip-sa              Do not create/annotate the wazuh-manager ServiceAccount
   -h, --help             Show this help
@@ -113,6 +116,10 @@ while [[ $# -gt 0 ]]; do
     --worker-tag)
       WORKER_TAG="${2:?--worker-tag requires a tag}"
       shift 2
+      ;;
+    --reset-images)
+      RESET_IMAGES=1
+      shift
       ;;
     --dry-run)
       DRY_RUN=1
@@ -213,6 +220,84 @@ while i < len(lines):
     i += 1
 Path(path).write_text("".join(out))
 PY
+}
+
+# The cert files are produced by setup.sh (or extracted from a running cluster).
+# Without them kustomize fails deep inside secretGenerator with an evalsymlink
+# error that reads like a bug in the overlay, so check up front instead.
+require_certs() {
+  local missing=()
+  local f
+  for f in \
+    base/certs/indexer_cluster/root-ca.pem \
+    base/certs/indexer_cluster/node.pem \
+    base/certs/indexer_cluster/node-key.pem \
+    base/certs/indexer_cluster/dashboard.pem \
+    base/certs/indexer_cluster/dashboard-key.pem \
+    base/certs/indexer_cluster/admin.pem \
+    base/certs/indexer_cluster/admin-key.pem \
+    base/certs/indexer_cluster/filebeat.pem \
+    base/certs/indexer_cluster/filebeat-key.pem \
+    base/certs/dashboard_http/cert.pem \
+    base/certs/dashboard_http/key.pem
+  do
+    [[ -f "${ROOT}/${f}" ]] || missing+=("${f}")
+  done
+  [[ ${#missing[@]} -eq 0 ]] && return 0
+
+  echo "error: ${#missing[@]} TLS cert file(s) missing under ${ROOT}/base/certs" >&2
+  printf '  %s\n' "${missing[@]}" >&2
+  cat >&2 <<EOF
+
+These are inputs to the indexer-certs / dashboard-certs secretGenerator.
+
+  New install:       run ../setup.sh, which generates them.
+  Existing cluster:  extract the certs already in use, so the regenerated
+                     secret keeps the same hash and no pod restarts:
+
+    IC=\$(kubectl -n ${NAMESPACE} get secret -o name | grep -m1 'secret/indexer-certs')
+    DC=\$(kubectl -n ${NAMESPACE} get secret -o name | grep -m1 'secret/dashboard-certs')
+    kubectl -n ${NAMESPACE} get "\$IC" -o json | jq -r '.data | to_entries[] | "\\(.key) \\(.value)"' \\
+      | while read -r k v; do printf '%s' "\$v" | base64 -d > "${ROOT}/base/certs/indexer_cluster/\$k"; done
+    kubectl -n ${NAMESPACE} get "\$DC" -o json | jq -r '.data | to_entries[] | select(.key != "root-ca.pem") | "\\(.key) \\(.value)"' \\
+      | while read -r k v; do printf '%s' "\$v" | base64 -d > "${ROOT}/base/certs/dashboard_http/\$k"; done
+
+Do NOT run base/certs/*/generate_certs.sh against a live cluster: new certs
+replace the indexer transport TLS and restart every pod.
+EOF
+  exit 1
+}
+
+# envs/aws-customer pins newName/newTag. Applying with no image flags therefore
+# rewrites the manager images to those defaults, which silently repoints a
+# cluster running from a different registry (and breaks it if that default does
+# not exist). Carry forward whatever is already deployed unless told otherwise.
+inherit_deployed_images() {
+  [[ "${RESET_IMAGES}" -eq 1 ]] && return 0
+  [[ -n "${IMAGE_REGISTRY}" && -n "${IMAGE_TAG}${MASTER_TAG}${WORKER_TAG}" ]] && return 0
+
+  local sts image registry tag
+  for sts in wazuh-manager-master wazuh-manager-worker; do
+    image="$(kubectl -n "${NAMESPACE}" get statefulset "${sts}" \
+      -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+    [[ -n "${image}" ]] || continue
+
+    registry="${image%/*}"
+    tag="${image##*:}"
+    [[ "${tag}" == "${image}" ]] && tag=""
+
+    if [[ -z "${IMAGE_REGISTRY}" ]]; then
+      IMAGE_REGISTRY="${registry}"
+      echo "note: keeping deployed image registry ${IMAGE_REGISTRY} (--image-registry to change, --reset-images for the overlay default)"
+    fi
+    if [[ -n "${tag}" ]]; then
+      if [[ "${sts}" == "wazuh-manager-master" && -z "${MASTER_TAG}${IMAGE_TAG}" ]]; then
+        MASTER_TAG="${tag}"
+      elif [[ "${sts}" == "wazuh-manager-worker" && -z "${WORKER_TAG}${IMAGE_TAG}" ]]; then
+        WORKER_TAG="${tag}"
+      fi
+    fi
+  done
 }
 
 set_images() {
@@ -331,6 +416,8 @@ run_apply() {
   fi
 }
 
+require_certs
+inherit_deployed_images
 ensure_service_account
 
 if [[ "${FORWARD}" -eq 1 ]]; then
