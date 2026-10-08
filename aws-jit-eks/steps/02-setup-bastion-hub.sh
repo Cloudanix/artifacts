@@ -255,7 +255,7 @@ else
     CLUSTER_ARN=$(aws ecs create-cluster --cluster-name "$ECS_CLUSTER_NAME" \
         --capacity-providers FARGATE FARGATE_SPOT \
         --default-capacity-provider-strategy "capacityProvider=FARGATE,weight=1" \
-        --tags "key=asset-owner,value=Cloudanix" "key=asset-service,value=CloudSecurity" "key=asset-purpose,value=Security-Monitoring" "key=purpose,value=jit_k8s" "key=aws-apn-id,value=${CDX_APN_ID}" \
+        --tags "key=owner,value=cloudanix" "key=service,value=proxy-ecs" "key=purpose,value=cdx-jit-k8s" "key=asset-owner,value=Cloudanix" "key=asset-service,value=CloudSecurity" "key=asset-purpose,value=Security-Monitoring" "key=aws-apn-id,value=${CDX_APN_ID}" \
         --query 'cluster.clusterArn' --output text)
     ok "Cluster created: $ECS_CLUSTER_NAME"
 fi
@@ -284,12 +284,13 @@ TASK_DEF=$(jq -n \
             logConfiguration: {logDriver: "awslogs", options: {"awslogs-group": $lg, "awslogs-region": $region, "awslogs-stream-prefix": "bastion"}}
         }],
         tags: [
+            {key:"owner", value:"cloudanix"},
+            {key:"service", value:"proxy-ecs"},
+            {key:"purpose", value:"cdx-jit-k8s"},
             {key:"asset-owner", value:"Cloudanix"},
             {key:"asset-service", value:"CloudSecurity"},
             {key:"asset-purpose", value:"Security-Monitoring"},
-            {key:"purpose", value:"jit_k8s"},
             {key:"aws-apn-id", value:$apn},
-            {key:"service", value:"bastion"},
             {key:"scope", value:"hub"}
         ]
     }')
@@ -320,7 +321,7 @@ else
         --platform-version LATEST \
         --enable-execute-command \
         --network-configuration "$NETWORK_CONFIG" \
-        --tags "key=asset-owner,value=Cloudanix" "key=asset-service,value=CloudSecurity" "key=asset-purpose,value=Security-Monitoring" "key=purpose,value=jit_k8s" "key=aws-apn-id,value=${CDX_APN_ID}" "key=service,value=bastion" "key=scope,value=hub" > /dev/null
+        --tags "key=owner,value=cloudanix" "key=service,value=proxy-ecs" "key=purpose,value=cdx-jit-k8s" "key=asset-owner,value=Cloudanix" "key=asset-service,value=CloudSecurity" "key=asset-purpose,value=Security-Monitoring" "key=aws-apn-id,value=${CDX_APN_ID}" "key=scope,value=hub" > /dev/null
     ok "Service created: $SERVICE_NAME"
 fi
 

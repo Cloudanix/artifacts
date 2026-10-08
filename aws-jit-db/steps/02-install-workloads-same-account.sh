@@ -433,6 +433,10 @@ fi
 
 step "Task Definitions"
 
+# ECS task-definition tags (owner/service/purpose + asset-* set). Added to every
+# task def below via a uniform jq transform at register time.
+TD_TAGS=$(cdx_tags_json_lc)
+
 # Common volume config for EFS
 VOLUME_CONFIG=$(jq -n \
     --arg fsid "$EFS_ID" \
@@ -483,7 +487,7 @@ if [[ "$ENABLE_DAM" == "true" ]]; then
         ]')
 fi
 
-echo "$PROXYSERVER_TD" > /tmp/td-proxyserver.json
+echo "$PROXYSERVER_TD" | jq --argjson tags "$TD_TAGS" '. + {tags: $tags}' > /tmp/td-proxyserver.json
 aws ecs register-task-definition --cli-input-json file:///tmp/td-proxyserver.json > /dev/null
 ok "Task def: $TD_PROXYSERVER"
 
@@ -512,7 +516,7 @@ PROXYSQL_TD=$(jq -n \
             logConfiguration: {logDriver:"awslogs", options:{"awslogs-group":$lg, "awslogs-region":$region, "awslogs-stream-prefix":"ecs"}}
         }]
     }')
-echo "$PROXYSQL_TD" > /tmp/td-proxysql.json
+echo "$PROXYSQL_TD" | jq --argjson tags "$TD_TAGS" '. + {tags: $tags}' > /tmp/td-proxysql.json
 aws ecs register-task-definition --cli-input-json file:///tmp/td-proxysql.json > /dev/null
 ok "Task def: $TD_PROXYSQL"
 
@@ -562,7 +566,7 @@ if [[ "$ENABLE_DAM" == "true" ]]; then
         ]')
 fi
 
-echo "$QUERY_LOGGING_TD" > /tmp/td-query-logging.json
+echo "$QUERY_LOGGING_TD" | jq --argjson tags "$TD_TAGS" '. + {tags: $tags}' > /tmp/td-query-logging.json
 aws ecs register-task-definition --cli-input-json file:///tmp/td-query-logging.json > /dev/null
 ok "Task def: $TD_QUERY_LOGGING"
 
@@ -606,7 +610,7 @@ if [[ "$ENABLE_DAM" == "true" ]]; then
                 logConfiguration: {logDriver:"awslogs", options:{"awslogs-group":$lg, "awslogs-region":$region, "awslogs-stream-prefix":"ecs"}}
             }]
         }')
-    echo "$DAM_SERVER_TD" > /tmp/td-dam-server.json
+    echo "$DAM_SERVER_TD" | jq --argjson tags "$TD_TAGS" '. + {tags: $tags}' > /tmp/td-dam-server.json
     aws ecs register-task-definition --cli-input-json file:///tmp/td-dam-server.json > /dev/null
     ok "Task def: $TD_DAM_SERVER"
 
@@ -642,7 +646,7 @@ if [[ "$ENABLE_DAM" == "true" ]]; then
                 logConfiguration: {logDriver:"awslogs", options:{"awslogs-group":$lg, "awslogs-region":$region, "awslogs-stream-prefix":"ecs"}}
             }]
         }')
-    echo "$POSTGRESQL_TD" > /tmp/td-postgresql.json
+    echo "$POSTGRESQL_TD" | jq --argjson tags "$TD_TAGS" '. + {tags: $tags}' > /tmp/td-postgresql.json
     aws ecs register-task-definition --cli-input-json file:///tmp/td-postgresql.json > /dev/null
     ok "Task def: $TD_POSTGRESQL"
 fi

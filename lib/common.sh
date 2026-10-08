@@ -33,13 +33,21 @@ _CDX_COMMON_LOADED="true"
 #                    "{Key=asset-owner,Value=Cloudanix},{Key=asset-service,Value=CloudSecurity},..."
 #   cdx_tags_kv    → for --tags on IAM/EFS/Secrets (space-separated Key=..,Value=..)
 #                    "Key=asset-owner,Value=Cloudanix Key=asset-service,Value=CloudSecurity ..."
-#   cdx_tags_ecs   → for ECS --tags (lowercase key/value)
-#                    "key=asset-owner,value=Cloudanix key=asset-service,value=CloudSecurity ..."
-#   cdx_tags_json  → JSON array [{"Key":..,"Value":..}, ...]  (task defs, some APIs)
-#   cdx_tags_json_lc → JSON array with lowercase key/value (ECS task-def "tags")
+#   cdx_tags_ecs   → for ECS cluster/service --tags (lowercase key/value). ECS
+#                    resources also carry owner=cloudanix, service=proxy-ecs,
+#                    purpose=cdx-jit-<db|vm|k8s> on top of the asset-* set.
+#   cdx_tags_json  → JSON array [{"Key":..,"Value":..}, ...]  (non-ECS APIs)
+#   cdx_tags_json_lc → JSON array lowercase (ECS task-def "tags"; same ECS set)
 # =============================================================================
 
 cdx_purpose() { echo "${CDX_PURPOSE:-jit}"; }
+
+# cdx_jump_purpose
+#   ECS-resource "purpose" value: cdx-jit-<db|vm|k8s>. Derived from CDX_PURPOSE
+#   (jit_db -> cdx-jit-db). Used only on ECS clusters/services/task defs, which
+#   also carry owner=cloudanix and service=proxy-ecs in addition to the asset-*
+#   tag set.
+cdx_jump_purpose() { echo "cdx-$(cdx_purpose | tr '_' '-')"; }
 
 # AWS Partner Network (APN) attribution tag applied to every created resource.
 # The value contains a ':' which is valid in AWS tag values and is NOT a
@@ -57,7 +65,7 @@ cdx_tags_kv() {
 }
 
 cdx_tags_ecs() {
-    echo "key=asset-owner,value=Cloudanix key=asset-service,value=CloudSecurity key=asset-purpose,value=Security-Monitoring key=purpose,value=$(cdx_purpose) key=aws-apn-id,value=${CDX_APN_ID}"
+    echo "key=owner,value=cloudanix key=service,value=proxy-ecs key=purpose,value=$(cdx_jump_purpose) key=asset-owner,value=Cloudanix key=asset-service,value=CloudSecurity key=asset-purpose,value=Security-Monitoring key=aws-apn-id,value=${CDX_APN_ID}"
 }
 
 cdx_tags_json() {
@@ -65,7 +73,7 @@ cdx_tags_json() {
 }
 
 cdx_tags_json_lc() {
-    printf '[{"key":"asset-owner","value":"Cloudanix"},{"key":"asset-service","value":"CloudSecurity"},{"key":"asset-purpose","value":"Security-Monitoring"},{"key":"purpose","value":"%s"},{"key":"aws-apn-id","value":"%s"}]' "$(cdx_purpose)" "$CDX_APN_ID"
+    printf '[{"key":"owner","value":"cloudanix"},{"key":"service","value":"proxy-ecs"},{"key":"purpose","value":"%s"},{"key":"asset-owner","value":"Cloudanix"},{"key":"asset-service","value":"CloudSecurity"},{"key":"asset-purpose","value":"Security-Monitoring"},{"key":"aws-apn-id","value":"%s"}]' "$(cdx_jump_purpose)" "$CDX_APN_ID"
 }
 
 # =============================================================================
