@@ -23,7 +23,10 @@ require_env AWS_REGION JIT_ACCOUNT_ID
 # =============================================================================
 
 PROJECT_NAME="${PROJECT_NAME:-cdx-jit-db}"
-ECS_ROLE_NAME="${PROJECT_NAME}-ECSRole"
+# Prefer the role provided to the install step (ECS_TASK_ROLE_NAME, used as the
+# ECS execution + task role). Fall back to the legacy derived name. This must
+# match the actual JIT task role so the DB-account role trusts the right ARN.
+ECS_ROLE_NAME="${ECS_TASK_ROLE_NAME:-${PROJECT_NAME}-ECSRole}"
 # The ARN of the ECS task role in the JIT workload account
 ECS_TASK_ROLE_ARN="arn:aws:iam::${JIT_ACCOUNT_ID}:role/${ECS_ROLE_NAME}"
 
