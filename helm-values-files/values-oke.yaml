@@ -78,5 +78,5 @@ falco:
   enabled: true
 
 # OKE uses CRI-O, not containerd
-vulnScannerCron:
+vulnScanner:
   containerRuntimeSocket: /run/crio/crio.sock
