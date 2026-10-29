@@ -71,6 +71,19 @@ if [ "$ENABLE_DAM" = true ]; then
     )
 fi
 
+# cdx-sql mode (UNTESTED, written 30 Oct 2026)
+# PROXY_ENGINE=cdxsql also syncs the cdx-sql image (the Go proxy that replaces
+# ProxySQL in the same slot). Default "proxysql" syncs exactly what it did before.
+PROXY_ENGINE="${PROXY_ENGINE:-proxysql}"
+case "$PROXY_ENGINE" in
+  proxysql) ;;
+  cdxsql)
+    echo "cdx-sql mode: also syncing gcp-ar-jit-cdx-sql"
+    IMAGES+=("gcp-ar-jit-cdx-sql")
+    ;;
+  *) echo "PROXY_ENGINE must be proxysql or cdxsql (got: $PROXY_ENGINE)"; exit 1 ;;
+esac
+
 
 # =========================
 # AUTH DOCKER

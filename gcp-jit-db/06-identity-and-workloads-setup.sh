@@ -21,6 +21,20 @@ K8S_SA="${PREFIX}-jit-sa"
 GCP_SA="${PREFIX}-jit-workload-sa"
 GCP_SA_EMAIL="${GCP_SA}@${PROJECT_ID}.iam.gserviceaccount.com"
 
+# cdx-sql mode (UNTESTED, written 30 Oct 2026)
+# PROXY_ENGINE / CDXSQL_REPLICAS come from jit-config.env (written by 04 in
+# cdx-sql mode) or the environment. Default "proxysql" generates the same
+# manifest as before, byte for byte.
+PROXY_ENGINE="${PROXY_ENGINE:-proxysql}"
+CDXSQL_REPLICAS="${CDXSQL_REPLICAS:-2}"
+case "$PROXY_ENGINE" in
+  proxysql|cdxsql) ;;
+  *) echo "PROXY_ENGINE must be proxysql or cdxsql (got: $PROXY_ENGINE)"; exit 1 ;;
+esac
+if [ "$PROXY_ENGINE" = "cdxsql" ] && ! [[ "$CDXSQL_REPLICAS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CDXSQL_REPLICAS must be a whole number >= 1 (got: $CDXSQL_REPLICAS)"; exit 1
+fi
+
 echo "=== Workload Identity Setup ==="
 echo ""
 echo "Project: $PROJECT_ID"
@@ -144,6 +158,125 @@ PROXYSQL_IMAGE="${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/gcp-ar-ji
 PROXYSERVER_IMAGE="${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/gcp-ar-jit-proxy-server:latest"
 QUERYLOG_IMAGE="${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/gcp-ar-jit-query-logging:latest"
 DAM_IMAGE="${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/gcp-ar-jit-dam-server:latest"
+
+# cdx-sql mode (UNTESTED, written 30 Oct 2026)
+# Each fragment below is spliced onto the END of an existing manifest line and
+# starts with its own newline, so in the default mode (all empty, image and
+# replicas unchanged) the generated manifest is identical to before.
+PROXYSQL_POD_IMAGE="$PROXYSQL_IMAGE"
+PROXYSQL_REPLICAS=1
+PROXYSQL_INIT_EXTRA=""
+PROXYSQL_CONTAINER_EXTRA=""
+PROXYSQL_MOUNTS_EXTRA=""
+PROXYSQL_VOLUMES_EXTRA=""
+PROXYSERVER_ENV_EXTRA=""
+QUERYLOG_STRATEGY_EXTRA=""
+if [ "$PROXY_ENGINE" = "cdxsql" ]; then
+  CDXSQL_IMAGE="${AR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/gcp-ar-jit-cdx-sql:latest"
+  echo "cdx-sql mode: deployment 'proxysql' runs $CDXSQL_IMAGE x $CDXSQL_REPLICAS"
+
+  # One admin token shared by every cdx-sql pod and proxy-server. Made once,
+  # reused on every later run so running pods keep working.
+  if kubectl get secret cdxsql-admin-token -n "$NAMESPACE" >/dev/null 2>&1; then
+    echo "cdx-sql mode: reusing Secret cdxsql-admin-token"
+  else
+    kubectl create secret generic cdxsql-admin-token -n "$NAMESPACE" \
+      --from-literal=CDXSQL_ADMIN_TOKEN="$(openssl rand -hex 32)"
+    echo "cdx-sql mode: created Secret cdxsql-admin-token"
+  fi
+
+  PROXYSQL_POD_IMAGE="$CDXSQL_IMAGE"
+  PROXYSQL_REPLICAS="$CDXSQL_REPLICAS"
+
+  # PGPASSWORD for the grant store = POSTGRES_PASSWORD from the same Secret
+  # Manager secret the postgresql pod uses. Only that one key is written to
+  # the env file. Runs as root (apk); the pod itself runs as uid 1000.
+  PROXYSQL_INIT_EXTRA=$'\n'"$(cat <<'YAML'
+      - name: load-secrets
+        image: alpine:3.19
+        securityContext:
+          runAsUser: 0
+        command:
+          - sh
+          - -c
+          - |
+            apk add --no-cache jq
+            jq -r '"PGPASSWORD=" + (.POSTGRES_PASSWORD | @sh)' /mnt/secrets-store/cdx-secrets.json > /env/.env
+        volumeMounts:
+        - name: secrets-store
+          mountPath: /mnt/secrets-store
+        - name: env-file
+          mountPath: /env
+YAML
+)"
+
+  PROXYSQL_CONTAINER_EXTRA=$'\n'"$(cat <<'YAML'
+        command:
+          - sh
+          - -c
+          - |
+            set -a
+            . /env/.env
+            set +a
+            exec /usr/local/bin/cdxsql-entrypoint
+        env:
+        - name: CDXSQL_GRANTS_DSN
+          value: "postgres://pgjitdbuser@postgresql:5432/jitdb?sslmode=disable"
+        - name: CDXSQL_ADMIN_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: cdxsql-admin-token
+              key: CDXSQL_ADMIN_TOKEN
+        readinessProbe:
+          exec:
+            command: ["/usr/local/bin/cdxsql", "-config", "/etc/cdxsql/config.json", "-healthcheck"]
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          exec:
+            command: ["/usr/local/bin/cdxsql", "-config", "/etc/cdxsql/config.json", "-healthcheck"]
+          initialDelaySeconds: 30
+          periodSeconds: 20
+          timeoutSeconds: 5
+          failureThreshold: 3
+YAML
+)"
+
+  PROXYSQL_MOUNTS_EXTRA=$'\n'"$(cat <<'YAML'
+        - name: env-file
+          mountPath: /env
+YAML
+)"
+
+  PROXYSQL_VOLUMES_EXTRA=$'\n'"$(cat <<'YAML'
+      - name: env-file
+        emptyDir: {}
+YAML
+)"
+
+  PROXYSERVER_ENV_EXTRA=$'\n'"$(cat <<'YAML'
+        env:
+        - name: CDX_PROXY_ENGINE
+          value: "cdxsql"
+        - name: CDXSQL_ADMIN_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: cdxsql-admin-token
+              key: CDXSQL_ADMIN_TOKEN
+YAML
+)"
+
+  # Exactly one query-logging pod, also during a rollout. rollingUpdate: null
+  # clears the defaulted rollingUpdate block on an existing Deployment.
+  QUERYLOG_STRATEGY_EXTRA=$'\n'"$(cat <<'YAML'
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+YAML
+)"
+fi
 cat > jit-service-manifest.yaml <<EOF
 ---
 apiVersion: v1
@@ -264,7 +397,7 @@ metadata:
   labels:
     app: proxysql
 spec:
-  replicas: 1
+  replicas: ${PROXYSQL_REPLICAS}
   selector:
     matchLabels:
       app: proxysql
@@ -287,11 +420,11 @@ spec:
             chown -R 1000:1000 /var/lib/proxysql || true
         volumeMounts:
         - name: proxysql-data
-          mountPath: /var/lib/proxysql
+          mountPath: /var/lib/proxysql${PROXYSQL_INIT_EXTRA}
       containers:
       - name: proxysql
-        image: $PROXYSQL_IMAGE
-        imagePullPolicy: Always
+        image: $PROXYSQL_POD_IMAGE
+        imagePullPolicy: Always${PROXYSQL_CONTAINER_EXTRA}
         ports:
         - containerPort: 6032
         - containerPort: 6033
@@ -302,7 +435,7 @@ spec:
           mountPath: /var/lib/proxysql
         - name: secrets-store
           mountPath: /mnt/secrets-store
-          readOnly: true
+          readOnly: true${PROXYSQL_MOUNTS_EXTRA}
         resources:
           requests:
             cpu: 100m
@@ -319,7 +452,7 @@ spec:
           driver: secrets-store-gke.csi.k8s.io
           readOnly: true
           volumeAttributes:
-            secretProviderClass: ${PREFIX}-secrets-provider
+            secretProviderClass: ${PREFIX}-secrets-provider${PROXYSQL_VOLUMES_EXTRA}
 
 ---
 apiVersion: v1
@@ -383,7 +516,7 @@ spec:
       containers:
       - name: proxyserver
         image: $PROXYSERVER_IMAGE
-        imagePullPolicy: Always
+        imagePullPolicy: Always${PROXYSERVER_ENV_EXTRA}
         ports:
         - containerPort: 8079
         command:
@@ -441,7 +574,7 @@ metadata:
   name: query-logging
   namespace: jit-services
 spec:
-  replicas: 1
+  replicas: 1${QUERYLOG_STRATEGY_EXTRA}
   selector:
     matchLabels:
       app: query-logging
@@ -718,6 +851,10 @@ echo "  - ProxySQL: $PROXYSQL_IMAGE"
 echo "  - ProxyServer: $PROXYSERVER_IMAGE"
 echo "  - Query Logging: $QUERYLOG_IMAGE"
 echo "  - DAM Server: $DAM_IMAGE"
+# cdx-sql mode (UNTESTED, written 30 Oct 2026)
+if [ "$PROXY_ENGINE" = "cdxsql" ]; then
+  echo "  - cdx-sql mode: deployment proxysql runs $CDXSQL_IMAGE x $CDXSQL_REPLICAS (see CDXSQL.md)"
+fi
 echo "  - ProxySQL ILB: $PROXYSQL_ILB"
 echo "  - ProxyServer ILB: $PROXYSERVER_ILB"
 echo "  - DAM Server ILB: $DAM_SERVER_ILB"
