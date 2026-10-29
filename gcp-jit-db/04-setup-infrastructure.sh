@@ -47,6 +47,20 @@ AR_LOCATION=$REGION
 read -p "Artifact Registry images repo [cdx-jit-db-artifacts]: " AR_REPO
 AR_REPO=${AR_REPO:-cdx-jit-db-artifacts}
 
+# cdx-sql mode (UNTESTED, written 30 Oct 2026)
+# Opt-in through the environment, no prompt, so the default run is unchanged:
+#   PROXY_ENGINE=cdxsql CDXSQL_REPLICAS=2 ./04-setup-infrastructure.sh
+# Both are saved to jit-config.env (only in cdx-sql mode) for 06 to read.
+PROXY_ENGINE=${PROXY_ENGINE:-proxysql}
+CDXSQL_REPLICAS=${CDXSQL_REPLICAS:-2}
+case "$PROXY_ENGINE" in
+  proxysql|cdxsql) ;;
+  *) echo "PROXY_ENGINE must be proxysql or cdxsql (got: $PROXY_ENGINE)"; exit 1 ;;
+esac
+if [ "$PROXY_ENGINE" = "cdxsql" ] && ! [[ "$CDXSQL_REPLICAS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CDXSQL_REPLICAS must be a whole number >= 1 (got: $CDXSQL_REPLICAS)"; exit 1
+fi
+
 # Input: Secret Manager values
 echo ""
 echo "Secret Manager Configuration:"
@@ -350,6 +364,15 @@ BASTION_VM=$BASTION_VM
 SECRET_NAME=$SECRET_NAME
 NFS_IP=$NFS_IP
 EOF
+
+# cdx-sql mode (UNTESTED, written 30 Oct 2026)
+if [ "$PROXY_ENGINE" = "cdxsql" ]; then
+  cat >> /tmp/jit-config.env <<EOF
+PROXY_ENGINE=$PROXY_ENGINE
+CDXSQL_REPLICAS=$CDXSQL_REPLICAS
+EOF
+  echo "cdx-sql mode: PROXY_ENGINE=cdxsql, CDXSQL_REPLICAS=$CDXSQL_REPLICAS saved to /tmp/jit-config.env"
+fi
 
 echo ""
 echo "=== Infrastructure Ready ==="

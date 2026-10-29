@@ -223,6 +223,19 @@ if [ "$ENABLE_DAM" = true ]; then
   )
 fi
 
+# cdx-sql mode (UNTESTED, written 30 Oct 2026)
+# PROXY_ENGINE=cdxsql also imports the cdx-sql image (the Go proxy that
+# replaces ProxySQL). Default "proxysql" imports exactly what it did before.
+PROXY_ENGINE="${PROXY_ENGINE:-proxysql}"
+case "$PROXY_ENGINE" in
+  proxysql) ;;
+  cdxsql)
+    echo "  cdx-sql mode: also importing cloudanix/ecr-aws-jit-cdx-sql"
+    IMAGES+=("cloudanix/ecr-aws-jit-cdx-sql")
+    ;;
+  *) echo "PROXY_ENGINE must be proxysql or cdxsql (got: $PROXY_ENGINE)"; exit 1 ;;
+esac
+
 for IMAGE in "${IMAGES[@]}"; do
   echo ""
   echo "🔄 Processing: ${IMAGE}:${IMAGE_TAG}"
