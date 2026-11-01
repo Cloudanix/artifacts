@@ -91,6 +91,7 @@ CONFIG_FIELDS=(
     "SUBSCRIPTION_ID|azure_subscription_id||Hub Azure Subscription ID|*|false"
     "TARGET_SUBSCRIPTION_ID|azure_subscription_id||Target VM Subscription ID (same GUID if one subscription)|new-vnet,onboard-new-vnet,onboard-peered|false"
     "LOCATION|nonempty|eastus2|Azure Region|new-vnet,existing-vnet|false"
+    "HUB_VNET_CIDR|cidr|10.30.0.0/16|Hub VNet CIDR. A /16 such as 10.30.0.0/16. It must not overlap the target VNet. Jump, proxy, and spare subnets are .1, .2, and .3 inside it.|new-vnet|false"
     "NAME_PREFIX|alphanumeric_dash|cdxjit|Resource name prefix, 3-12 characters, starting with a lowercase letter. Reuse this same prefix when you add another VM to this hub.|*|false"
     "SSH_ALLOWED_CIDRS|nonempty||VPN CIDR allow-list for SSH to the jump VM|new-vnet,existing-vnet|false"
     "OPERATOR_OBJECT_ID|nonempty||Entra object ID of the operator who runs az ssh|new-vnet,existing-vnet|false"

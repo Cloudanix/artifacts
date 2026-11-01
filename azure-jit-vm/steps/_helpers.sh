@@ -59,11 +59,19 @@ apply_jump_tags() {
         --tags "${CDX_JUMP_TAG_ARGS[@]}" --only-show-errors >/dev/null
 }
 
-# Fixed address plan. Change here if it collides with the customer's networks.
-VNET_CIDR="10.30.0.0/16"
-JUMP_SUBNET_CIDR="10.30.1.0/24"
-ACI_SUBNET_CIDR="10.30.2.0/24"
-VM_SUBNET_CIDR="10.30.3.0/24"
+# Hub address plan. HUB_VNET_CIDR is the wizard answer for a new VNet. It is a
+# /16; the three subnets are the .1, .2, and .3 /24s inside it.
+VNET_CIDR="${HUB_VNET_CIDR:-10.30.0.0/16}"
+if [[ "$VNET_CIDR" =~ ^([0-9]+)\.([0-9]+)\.0\.0/16$ ]]; then
+    JUMP_SUBNET_CIDR="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.1.0/24"
+    ACI_SUBNET_CIDR="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.2.0/24"
+    VM_SUBNET_CIDR="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.3.0/24"
+else
+    VNET_CIDR="10.30.0.0/16"
+    JUMP_SUBNET_CIDR="10.30.1.0/24"
+    ACI_SUBNET_CIDR="10.30.2.0/24"
+    VM_SUBNET_CIDR="10.30.3.0/24"
+fi
 
 # -----------------------------------------------------------------------------
 # Validation
@@ -93,6 +101,10 @@ validate_inputs() {
     fi
     if ! validate_azure_subscription_id "$OPERATOR_OBJECT_ID"; then
         error "OPERATOR_OBJECT_ID is not a valid object ID (GUID)"
+        return 1
+    fi
+    if [[ -n "${HUB_VNET_CIDR:-}" && ! "$HUB_VNET_CIDR" =~ ^[0-9]+\.[0-9]+\.0\.0/16$ ]]; then
+        error "HUB_VNET_CIDR must be a /16 ending in .0.0, for example 10.30.0.0/16"
         return 1
     fi
     if [[ "$IMAGE_TAG" == "latest" ]]; then

@@ -10,7 +10,7 @@ cdx vm connect → az ssh (Entra login) → jump VM → private proxy containers
 
 | Resource | Purpose |
 |---|---|
-| VNet `10.30.0.0/16` with jump, ACI, and VM subnets | Private network for the proxy |
+| VNet you choose, default `10.30.0.0/16`, with jump, ACI, and VM subnets | Private network for the proxy |
 | NSG on the jump subnet | SSH (22) from `SSH_ALLOWED_CIDRS` only |
 | Jump VM (Ubuntu 22.04, Standard_B2s) + public IP | Entra SSH entry point; the only public endpoint |
 | 3 private container groups (ACI) | sshpiper (2222), VM proxy (8079), logging |
