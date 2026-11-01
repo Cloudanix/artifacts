@@ -107,10 +107,6 @@ validate_inputs() {
     local cidr count=0
     while IFS= read -r cidr; do
         count=$((count + 1))
-        if [[ "$cidr" == "0.0.0.0/0" ]]; then
-            error "SSH_ALLOWED_CIDRS must not include 0.0.0.0/0"
-            return 1
-        fi
         if ! validate_cidr "$cidr"; then
             error "Invalid CIDR in SSH_ALLOWED_CIDRS: $cidr"
             return 1

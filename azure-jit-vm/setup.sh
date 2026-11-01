@@ -130,6 +130,9 @@ if [[ "$RESUME_MODE" == false ]]; then
     info "Please provide the following values. Press Enter to accept defaults."
     echo ""
 
+    CURRENT_SUB="$(az account show --query id -o tsv 2>/dev/null || true)"
+    CURRENT_OID="$(az ad signed-in-user show --query id -o tsv 2>/dev/null || true)"
+
     for field_def in "${CONFIG_FIELDS[@]}"; do
         IFS='|' read -r field_name field_rule field_default field_prompt field_scopes field_sensitive <<< "$field_def"
 
@@ -147,6 +150,62 @@ if [[ "$RESUME_MODE" == false ]]; then
                 continue
             fi
         fi
+
+        case "$field_name" in
+            SUBSCRIPTION_ID|TARGET_SUBSCRIPTION_ID)
+                [[ -z "$field_default" && -n "$CURRENT_SUB" ]] && field_default="$CURRENT_SUB"
+                ;;
+            OPERATOR_OBJECT_ID)
+                [[ -z "$field_default" && -n "$CURRENT_OID" ]] && field_default="$CURRENT_OID"
+                ;;
+            SSH_ALLOWED_CIDRS)
+                if prompt_yes_no "Do you have a VPN CIDR to allow for SSH to the jump VM?" "n"; then
+                    while true; do
+                        value=$(prompt_with_default "VPN CIDR or CIDRs, comma-separated" "")
+                        ok_cidrs=true
+                        while IFS= read -r cidr; do
+                            [[ -z "$cidr" ]] && continue
+                            if ! validate_cidr "$cidr"; then
+                                warn "Invalid CIDR: $cidr"
+                                ok_cidrs=false
+                            fi
+                        done < <(printf '%s\n' "$value" | tr ',' '\n' | tr -d ' \t')
+                        [[ "$ok_cidrs" == true && -n "$value" ]] && break
+                    done
+                else
+                    value="0.0.0.0/0"
+                    info "No VPN CIDR. SSH to the jump VM will allow 0.0.0.0/0."
+                fi
+                set_config_value "$STATE_FILE" "$field_name" "$value"
+                continue
+                ;;
+            JUMP_VM_SSH_PUBLIC_KEY_FILE)
+                jump_key="${HOME}/.ssh/cdx-azure-jit-jump"
+                mkdir -p "${HOME}/.ssh"
+                chmod 700 "${HOME}/.ssh"
+                if [[ ! -f "${jump_key}.pub" ]]; then
+                    ssh-keygen -q -t ed25519 -f "$jump_key" -N "" -C "cdx-azure-jit-jump"
+                    chmod 600 "$jump_key"
+                    info "Created jump VM SSH key: ${jump_key}.pub"
+                else
+                    info "Using existing jump VM SSH key: ${jump_key}.pub"
+                fi
+                set_config_value "$STATE_FILE" "$field_name" "${jump_key}.pub"
+                continue
+                ;;
+            ACR_RESOURCE_ID)
+                registry="$(get_config_value "$STATE_FILE" "IMAGE_REGISTRY")"
+                hub_sub="$(get_config_value "$STATE_FILE" "SUBSCRIPTION_ID")"
+                [[ -n "$hub_sub" ]] && az account set --subscription "$hub_sub" >/dev/null
+                acr_id="$(az acr show --name "${registry%%.*}" --query id -o tsv 2>/dev/null || true)"
+                if [[ -n "$acr_id" ]]; then
+                    info "Registry resource ID: $acr_id"
+                    set_config_value "$STATE_FILE" "$field_name" "$acr_id"
+                    continue
+                fi
+                field_prompt="Full resource ID of ${registry} (for example /subscriptions/<subscription>/resourceGroups/<group>/providers/Microsoft.ContainerRegistry/registries/${registry%%.*})"
+                ;;
+        esac
 
         # Prompt for value with validation
         while true; do

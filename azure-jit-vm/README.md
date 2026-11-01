@@ -27,14 +27,15 @@ loopback only.
 - Azure CLI (`az`) and `jq`, signed in as a **user** (`az login`), with rights
   to create resources and role assignments in the subscription (Owner, or
   Contributor plus User Access Administrator).
-- An Azure Container Registry in your subscription. Pass its login server and
-  resource ID. Setup asks for the image tag with the other answers and imports
+- Registry login server defaults to `cdxjitcentral.azurecr.io`. The resource ID
+  is looked up from that name. Setup asks for the image tag and imports
   `cloudanix/ecr-aws-jit-vm-sshpiper`, `cloudanix/ecr-aws-jit-vm-proxyserver`,
-  and `cloudanix/ecr-aws-jit-vm-logging` at that tag from
-  `cdxjitcentral.azurecr.io`. `latest` is rejected.
+  and `cloudanix/ecr-aws-jit-vm-logging` at that tag. `latest` is rejected.
+  When the registry is already `cdxjitcentral`, the images are not copied.
 - `CDX_AUTH_TOKEN` and `CDX_SIGNATURE_SECRET_KEY`, provided by Cloudanix.
-- Your operator public IP or CIDR, and your Entra object ID:
-  `az ad signed-in-user show --query id -o tsv`
+- A VPN CIDR for SSH to the jump VM, if you have one. Otherwise SSH is allowed
+  from `0.0.0.0/0`. The signed-in Entra user is the default operator. The jump
+  VM key is created at `~/.ssh/cdx-azure-jit-jump`.
 - A target VM reachable from the ACI subnet (`10.30.2.0/24`). Either place it in
   the created VM subnet (`10.30.3.0/24`) or peer its VNet.
 
