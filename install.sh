@@ -72,13 +72,14 @@ echo -e "${R}"
 # SETUP TYPE SELECTION
 # =============================================================================
 
-SETUP_TYPES=("aws-jit-db" "aws-jit-vm" "aws-jit-eks" "aws-customer-wazuh" "azure-jit-db" "azure-jit-k8s" "gcp-jit-db")
+SETUP_TYPES=("aws-jit-db" "aws-jit-vm" "aws-jit-eks" "aws-customer-wazuh" "azure-jit-db" "azure-jit-vm" "azure-jit-k8s" "gcp-jit-db")
 SETUP_LABELS=(
     "AWS JIT Database"
     "AWS JIT VM (SSH Proxy)"
     "AWS JIT EKS (Kubernetes)"
     "AWS Wazuh Central Server"
     "Azure JIT Database"
+    "Azure JIT VM (SSH Proxy)"
     "Azure JIT Kubernetes (AKS)"
     "GCP JIT Database"
 )
@@ -193,6 +194,15 @@ if cdx_curl "${REPO_BASE}/${SELECTED}/cleanup/cleanup.sh" -o "${TARGET_DIR}/clea
     echo -e "  ${G}✓${R} ${SELECTED}/cleanup/cleanup.sh"
 else
     rm -f "${TARGET_DIR}/cleanup/cleanup.sh" 2>/dev/null || true
+fi
+
+# Download the forwarder refresh script if present (optional). Azure JIT VM
+# documents running it after a container group is replaced.
+if cdx_curl "${REPO_BASE}/${SELECTED}/refresh-forwarders.sh" -o "${TARGET_DIR}/refresh-forwarders.sh" 2>/dev/null; then
+    chmod +x "${TARGET_DIR}/refresh-forwarders.sh"
+    echo -e "  ${G}✓${R} ${SELECTED}/refresh-forwarders.sh"
+else
+    rm -f "${TARGET_DIR}/refresh-forwarders.sh" 2>/dev/null || true
 fi
 
 # Download step scripts by listing from a manifest
