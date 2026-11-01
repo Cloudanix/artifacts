@@ -27,8 +27,11 @@ loopback only.
 - Azure CLI (`az`) and `jq`, signed in as a **user** (`az login`), with rights
   to create resources and role assignments in the subscription (Owner, or
   Contributor plus User Access Administrator).
-- An Azure Container Registry containing the Cloudanix proxy images, tagged with
-  an immutable version (not `latest`). Pass its login server and resource ID.
+- An Azure Container Registry in your subscription. Pass its login server and
+  resource ID. Setup asks for the image tag with the other answers and imports
+  `cloudanix/ecr-aws-jit-vm-sshpiper`, `cloudanix/ecr-aws-jit-vm-proxyserver`,
+  and `cloudanix/ecr-aws-jit-vm-logging` at that tag from
+  `cdxjitcentral.azurecr.io`. `latest` is rejected.
 - `CDX_AUTH_TOKEN` and `CDX_SIGNATURE_SECRET_KEY`, provided by Cloudanix.
 - Your operator public IP or CIDR, and your Entra object ID:
   `az ad signed-in-user show --query id -o tsv`

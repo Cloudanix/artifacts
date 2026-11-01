@@ -764,6 +764,12 @@ validate_nonempty() {
     [[ -n "$value" ]]
 }
 
+# Immutable registry tag. Rejects empty and "latest".
+validate_image_tag() {
+    local value="$1"
+    [[ "$value" =~ ^[A-Za-z0-9._-]+$ && "$value" != "latest" ]]
+}
+
 # Accepts any value, including empty — for genuinely optional fields.
 validate_optional() {
     return 0
@@ -785,6 +791,7 @@ validate() {
         semver_or_latest)       validate_semver_or_latest "$value" ;;
         boolean)                validate_boolean "$value" ;;
         nonempty)               validate_nonempty "$value" ;;
+        image_tag)              validate_image_tag "$value" ;;
         optional)               validate_optional "$value" ;;
         *)                      validate_nonempty "$value" ;;  # fallback
     esac

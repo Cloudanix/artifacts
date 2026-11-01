@@ -27,8 +27,8 @@ SCOPE_MODE_LABELS=(
 # =============================================================================
 
 declare -A STEPS_FOR_MODE
-STEPS_FOR_MODE["new-vnet"]="01-network-and-jump-vm 02-storage-and-keyvaults 03-identity-and-rbac 04-runtime-config 05-proxy-containers 06-jump-forwarders 07-peer-vnet 08-accept-peering 09-allow-target-ssh 10-store-ssh-key"
-STEPS_FOR_MODE["existing-vnet"]="01-existing-vnet 02-storage-and-keyvaults 03-identity-and-rbac 04-runtime-config 05-proxy-containers 06-jump-forwarders 09-allow-target-ssh 10-store-ssh-key"
+STEPS_FOR_MODE["new-vnet"]="00-create-roles 00-import-images 01-network-and-jump-vm 02-storage-and-keyvaults 03-identity-and-rbac 04-runtime-config 05-proxy-containers 06-jump-forwarders 07-peer-vnet 08-accept-peering 09-allow-target-ssh 10-store-ssh-key"
+STEPS_FOR_MODE["existing-vnet"]="00-create-roles 00-import-images 01-existing-vnet 02-storage-and-keyvaults 03-identity-and-rbac 04-runtime-config 05-proxy-containers 06-jump-forwarders 09-allow-target-ssh 10-store-ssh-key"
 STEPS_FOR_MODE["onboard-peered"]="09-allow-target-ssh 10-store-ssh-key"
 STEPS_FOR_MODE["onboard-new-vnet"]="07-peer-vnet 08-accept-peering 09-allow-target-ssh 10-store-ssh-key"
 
@@ -37,6 +37,8 @@ STEPS_FOR_MODE["onboard-new-vnet"]="07-peer-vnet 08-accept-peering 09-allow-targ
 # =============================================================================
 
 declare -A STEP_ACCOUNT
+STEP_ACCOUNT["00-create-roles"]="azure-subscription"
+STEP_ACCOUNT["00-import-images"]="azure-subscription"
 STEP_ACCOUNT["01-network-and-jump-vm"]="azure-subscription"
 STEP_ACCOUNT["01-existing-vnet"]="azure-subscription"
 STEP_ACCOUNT["02-storage-and-keyvaults"]="azure-subscription"
@@ -54,6 +56,8 @@ STEP_ACCOUNT["10-store-ssh-key"]="azure-subscription"
 # =============================================================================
 
 declare -A STEP_LABELS
+STEP_LABELS["00-create-roles"]="JIT VM custom roles"
+STEP_LABELS["00-import-images"]="Import proxy images from the Cloudanix registry"
 STEP_LABELS["01-network-and-jump-vm"]="Network and Jump VM (Entra SSH login)"
 STEP_LABELS["01-existing-vnet"]="Jump VM in an existing VNet"
 STEP_LABELS["02-storage-and-keyvaults"]="Storage Account and Key Vaults"
@@ -98,10 +102,10 @@ CONFIG_FIELDS=(
     "EXISTING_ACI_SUBNET|nonempty||Existing subnet for the proxy containers (delegated to Container Instances, or empty so this script can delegate it)|existing-vnet|false"
     "IMAGE_REGISTRY|nonempty||Registry login server holding the proxy images (e.g. example.azurecr.io)|new-vnet,existing-vnet|false"
     "ACR_RESOURCE_ID|nonempty||Resource ID of that registry (receives AcrPull)|new-vnet,existing-vnet|false"
-    "IMAGE_TAG|nonempty||Immutable image tag, not latest (e.g. 0.3.26)|new-vnet,existing-vnet|false"
-    "SSHPIPER_IMAGE|nonempty|cloudanix/jit-vm-sshpiper|sshpiper image path in the registry|new-vnet,existing-vnet|false"
-    "VMPROXY_IMAGE|nonempty|cloudanix/jit-vm-proxyserver|VM proxy server image path in the registry|new-vnet,existing-vnet|false"
-    "LOGGING_IMAGE|nonempty|cloudanix/jit-vm-logging|Command logging image path in the registry|new-vnet,existing-vnet|false"
+    "IMAGE_TAG|image_tag||Image tag to pull and deploy (for example v0.3.33, not latest)|new-vnet,existing-vnet|false"
+    "SSHPIPER_IMAGE|nonempty|cloudanix/ecr-aws-jit-vm-sshpiper|sshpiper image path in the registry|new-vnet,existing-vnet|false"
+    "VMPROXY_IMAGE|nonempty|cloudanix/ecr-aws-jit-vm-proxyserver|VM proxy server image path in the registry|new-vnet,existing-vnet|false"
+    "LOGGING_IMAGE|nonempty|cloudanix/ecr-aws-jit-vm-logging|Command logging image path in the registry|new-vnet,existing-vnet|false"
     "CDX_API_BASE|nonempty|https://api.cloudanix.com|Cloudanix API base URL|new-vnet,existing-vnet|false"
     "CDX_DC|nonempty|US|Cloudanix data center (US, IN, or MC1)|new-vnet,existing-vnet|false"
     "LOG_CONTAINER|alphanumeric_dash|jit-vm-logs|Blob container for session recordings|new-vnet,existing-vnet|false"

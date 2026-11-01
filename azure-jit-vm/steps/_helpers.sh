@@ -46,7 +46,7 @@ apply_asset_tags() {
     local id
     for id in "$@"; do
         [[ -n "$id" && "$id" != "null" ]] || continue
-        az resource tag --ids "$id" --is-incremental true \
+        az resource tag --ids "$id" --is-incremental \
             --tags "${CDX_ASSET_TAG_ARGS[@]}" --only-show-errors >/dev/null
     done
 }
@@ -55,7 +55,7 @@ apply_asset_tags() {
 #   Discovery tags plus the asset tags, on the jump VM only.
 apply_jump_tags() {
     [[ -n "$1" && "$1" != "null" ]] || return 0
-    az resource tag --ids "$1" --is-incremental true \
+    az resource tag --ids "$1" --is-incremental \
         --tags "${CDX_JUMP_TAG_ARGS[@]}" --only-show-errors >/dev/null
 }
 

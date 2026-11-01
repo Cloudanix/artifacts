@@ -106,6 +106,8 @@ fi
 JUMP_ID="$(az vm show --resource-group "$RG" --name "$JUMP_VM" --query id -o tsv)"
 ensure_role "$OPERATOR_OBJECT_ID" User "Virtual Machine User Login" "$JUMP_ID"
 ensure_role "$OPERATOR_OBJECT_ID" User "Reader" "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG"
+ensure_role "$OPERATOR_OBJECT_ID" User "CDX JIT VM SSH Access" "$JUMP_ID"
+ensure_role "$OPERATOR_OBJECT_ID" User "CDX JIT VM Read Access" "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RG"
 
 apply_asset_tags \
     "$(az group show --name "$RG" --query id -o tsv)" \
