@@ -243,12 +243,39 @@ if [[ "$RESUME_MODE" == false ]]; then
         fi
 
         stored_value=$(get_config_value "$STATE_FILE" "$field_name")
+        case "$field_name" in
+            SUBSCRIPTION_ID) summary_label="Hub subscription" ;;
+            TARGET_SUBSCRIPTION_ID) summary_label="Target subscription" ;;
+            LOCATION) summary_label="Region" ;;
+            HUB_VNET_CIDR) summary_label="Hub VNet CIDR" ;;
+            NAME_PREFIX) summary_label="Name prefix" ;;
+            SSH_ALLOWED_CIDRS) summary_label="Jump SSH CIDRs" ;;
+            OPERATOR_OBJECT_ID) summary_label="Operator object ID" ;;
+            JUMP_VM_ADMIN_USERNAME) summary_label="Jump admin user" ;;
+            JUMP_VM_SSH_PUBLIC_KEY_FILE) summary_label="Jump SSH public key" ;;
+            IMAGE_REGISTRY) summary_label="Registry" ;;
+            ACR_RESOURCE_ID) summary_label="Registry resource ID" ;;
+            IMAGE_TAG) summary_label="Image tag" ;;
+            SSHPIPER_IMAGE) summary_label="sshpiper image" ;;
+            VMPROXY_IMAGE) summary_label="VM proxy image" ;;
+            LOGGING_IMAGE) summary_label="Logging image" ;;
+            CDX_API_BASE) summary_label="API base URL" ;;
+            CDX_DC) summary_label="Data center" ;;
+            LOG_CONTAINER) summary_label="Log container" ;;
+            TARGET_VNET_NAME) summary_label="Target VNet" ;;
+            TARGET_VNET_RG) summary_label="Target VNet resource group" ;;
+            TARGET_VM_NAME) summary_label="Target VM" ;;
+            TARGET_VM_RG) summary_label="Target VM resource group" ;;
+            TARGET_VM_OS_USER) summary_label="Target OS user" ;;
+            TARGET_SSH_PRIVATE_KEY_FILE) summary_label="Target SSH private key" ;;
+            *) summary_label="$field_name" ;;
+        esac
 
         if [[ "$field_sensitive" == "true" ]]; then
             masked=$(mask_sensitive "$stored_value")
-            echo "  $field_prompt: $masked"
+            echo "  $summary_label: $masked"
         else
-            echo "  $field_prompt: $stored_value"
+            echo "  $summary_label: $stored_value"
         fi
     done
 
@@ -293,38 +320,45 @@ for step_id in "${ALL_STEPS[@]}"; do
             expected_account_id=$(get_config_value "$STATE_FILE" "$account_id_field")
         fi
 
-        show_account_switch_banner "$account_label" "$expected_account_id" "$step_label"
-
-        # Prompt for confirmation and verify credentials
-        if ! prompt_yes_no "Have you switched to the correct account?" "y"; then
-            warn "Please switch accounts and re-run the script. Progress has been saved."
-            exit 0
+        if [[ -n "$expected_account_id" ]] && [[ "$step_account" == *"subscription"* ]]; then
+            current_sub="$(az account show --query id -o tsv 2>/dev/null || true)"
+        else
+            current_sub=""
         fi
+        if [[ -n "$current_sub" && "$current_sub" == "$expected_account_id" ]]; then
+            ok "Already using subscription $expected_account_id"
+        else
+            show_account_switch_banner "$account_label" "$expected_account_id" "$step_label"
 
-        # Verify account credentials if AWS
-        if [[ -n "$expected_account_id" ]] && [[ "$expected_account_id" != "" ]]; then
-            if [[ "$step_account" == *"subscription"* ]]; then
-                # Azure verification
-                actual_id=$(verify_azure_subscription "$expected_account_id") && true
-                if [[ $? -ne 0 ]] && [[ -n "$actual_id" ]]; then
-                    error "Account mismatch!"
-                    error "  Expected: $expected_account_id"
-                    error "  Actual:   $actual_id"
-                    warn "Please switch to the correct account and re-run."
-                    exit 1
-                fi
-            else
-                # AWS verification
-                actual_id=$(verify_aws_account "$expected_account_id") && true
-                if [[ $? -ne 0 ]] && [[ -n "$actual_id" ]]; then
-                    error "Account mismatch!"
-                    error "  Expected: $expected_account_id"
-                    error "  Actual:   $actual_id"
-                    warn "Please switch to the correct account and re-run."
-                    exit 1
-                fi
+            # Prompt for confirmation and verify credentials
+            if ! prompt_yes_no "Have you switched to the correct account?" "y"; then
+                warn "Please switch accounts and re-run the script. Progress has been saved."
+                exit 0
             fi
-            ok "Account verified: $expected_account_id"
+
+            # Verify account credentials if AWS
+            if [[ -n "$expected_account_id" ]] && [[ "$expected_account_id" != "" ]]; then
+                if [[ "$step_account" == *"subscription"* ]]; then
+                    actual_id=$(verify_azure_subscription "$expected_account_id") && true
+                    if [[ $? -ne 0 ]] && [[ -n "$actual_id" ]]; then
+                        error "Account mismatch!"
+                        error "  Expected: $expected_account_id"
+                        error "  Actual:   $actual_id"
+                        warn "Please switch to the correct account and re-run."
+                        exit 1
+                    fi
+                else
+                    actual_id=$(verify_aws_account "$expected_account_id") && true
+                    if [[ $? -ne 0 ]] && [[ -n "$actual_id" ]]; then
+                        error "Account mismatch!"
+                        error "  Expected: $expected_account_id"
+                        error "  Actual:   $actual_id"
+                        warn "Please switch to the correct account and re-run."
+                        exit 1
+                    fi
+                fi
+                ok "Account verified: $expected_account_id"
+            fi
         fi
 
         CURRENT_ACCOUNT="$step_account"
@@ -354,12 +388,17 @@ for step_id in "${ALL_STEPS[@]}"; do
         fi
     done < <(echo "$steps_json" | jq -r '[.[] | select(.status == "complete") | .outputs // {} | to_entries[]] | .[] | "\(.key)=\(.value)"')
 
-    # Execute step script and capture output
-    step_exit_code=0
-    step_output=$(bash "$step_script" 2>&1) || step_exit_code=$?
-
-    # Display step output (non-OUTPUT lines)
-    echo "$step_output" | grep -v "^OUTPUT:" || true
+    # Run the step in the foreground so long Azure calls show progress.
+    # OUTPUT: lines stay in the log file and are not printed.
+    step_log="$(mktemp)"
+    set +e
+    set +o pipefail
+    bash "$step_script" 2>&1 | tee "$step_log" | grep -v --line-buffered '^OUTPUT:'
+    step_exit_code=${PIPESTATUS[0]}
+    set -o pipefail
+    set -e
+    step_output="$(cat "$step_log")"
+    rm -f "$step_log"
 
     if [[ $step_exit_code -ne 0 ]]; then
         error "Step '$step_label' failed with exit code $step_exit_code"

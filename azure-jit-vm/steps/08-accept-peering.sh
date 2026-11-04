@@ -41,7 +41,5 @@ STATE="$(az network vnet peering show --resource-group "$TARGET_VNET_RG" --vnet-
     exit 1
 }
 ok "Peering state: Connected"
-apply_asset_tags "$(az network vnet peering show --resource-group "$TARGET_VNET_RG" \
-    --vnet-name "$TARGET_VNET_NAME" --name "$PEERING" --query id -o tsv)"
-ok "Asset tags applied"
+# A virtual network peering has no tags property.
 az account set --subscription "$SUBSCRIPTION_ID"

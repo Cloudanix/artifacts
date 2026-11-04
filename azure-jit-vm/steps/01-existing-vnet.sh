@@ -82,26 +82,20 @@ ok "Public IP ready: $JUMP_PIP"
 if az vm show --resource-group "$RG" --name "$JUMP_VM" >/dev/null 2>&1; then
     ok "Jump VM exists: $JUMP_VM"
 else
+    info "Creating jump VM $JUMP_VM. This takes a few minutes."
     az vm create --resource-group "$RG" --name "$JUMP_VM" --location "$LOCATION" \
         --image Ubuntu2204 --size Standard_B2s \
         --subnet "$JUMP_SUBNET_ID" \
         --public-ip-address "$JUMP_PIP" --nsg "" \
         --admin-username "$JUMP_VM_ADMIN_USERNAME" \
         --ssh-key-values "$JUMP_VM_SSH_PUBLIC_KEY_FILE" \
+        --assign-identity \
         --tags "${CDX_JUMP_TAG_ARGS[@]}" \
         --only-show-errors >/dev/null
     ok "Jump VM created: $JUMP_VM"
 fi
 
-if az vm extension show --resource-group "$RG" --vm-name "$JUMP_VM" \
-    --name AADSSHLoginForLinux >/dev/null 2>&1; then
-    ok "AADSSHLoginForLinux extension exists"
-else
-    az vm extension set --resource-group "$RG" --vm-name "$JUMP_VM" \
-        --publisher Microsoft.Azure.ActiveDirectory --name AADSSHLoginForLinux \
-        --only-show-errors >/dev/null
-    ok "AADSSHLoginForLinux extension installed"
-fi
+ensure_aad_ssh_login || exit 1
 
 JUMP_ID="$(az vm show --resource-group "$RG" --name "$JUMP_VM" --query id -o tsv)"
 ensure_role "$OPERATOR_OBJECT_ID" User "Virtual Machine User Login" "$JUMP_ID"

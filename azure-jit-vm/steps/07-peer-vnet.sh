@@ -46,10 +46,7 @@ else
         --allow-vnet-access true --allow-forwarded-traffic true --only-show-errors >/dev/null
     ok "Hub peering created: $PEERING"
 fi
-
-apply_asset_tags "$(az network vnet peering show --resource-group "$HUB_VNET_RG" \
-    --vnet-name "$HUB_VNET_NAME" --name "$PEERING" --query id -o tsv)"
-ok "Asset tags applied"
+# A virtual network peering has no tags property.
 
 echo "OUTPUT:HUB_VNET_NAME=$HUB_VNET_NAME"
 echo "OUTPUT:HUB_VNET_RG=$HUB_VNET_RG"

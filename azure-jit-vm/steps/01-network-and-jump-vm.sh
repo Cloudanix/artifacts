@@ -72,27 +72,22 @@ ok "Public IP ready: $JUMP_PIP"
 if az vm show --resource-group "$RG" --name "$JUMP_VM" >/dev/null 2>&1; then
     ok "Jump VM exists: $JUMP_VM"
 else
+    info "Creating jump VM $JUMP_VM. This takes a few minutes."
     az vm create --resource-group "$RG" --name "$JUMP_VM" --location "$LOCATION" \
         --image Ubuntu2204 --size Standard_B2s \
         --vnet-name "$VNET" --subnet "$JUMP_SUBNET" \
         --public-ip-address "$JUMP_PIP" --nsg "" \
         --admin-username "$JUMP_VM_ADMIN_USERNAME" \
         --ssh-key-values "$JUMP_VM_SSH_PUBLIC_KEY_FILE" \
+        --assign-identity \
         --tags "${CDX_JUMP_TAG_ARGS[@]}" \
         --only-show-errors >/dev/null
     ok "Jump VM created: $JUMP_VM"
 fi
 
-# Entra (AAD) SSH login extension, required for az ssh vm
-if az vm extension show --resource-group "$RG" --vm-name "$JUMP_VM" \
-    --name AADSSHLoginForLinux >/dev/null 2>&1; then
-    ok "AADSSHLoginForLinux extension exists"
-else
-    az vm extension set --resource-group "$RG" --vm-name "$JUMP_VM" \
-        --publisher Microsoft.Azure.ActiveDirectory --name AADSSHLoginForLinux \
-        --only-show-errors >/dev/null
-    ok "AADSSHLoginForLinux extension installed"
-fi
+# Entra SSH login. The extension install fails closed when the VM has no
+# system-assigned identity, and a failed install must not be treated as done.
+ensure_aad_ssh_login || exit 1
 
 # Operator access: log in to the jump VM, and read the resource group so the
 # CLI can discover it.

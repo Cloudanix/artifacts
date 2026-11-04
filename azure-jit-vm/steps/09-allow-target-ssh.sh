@@ -32,6 +32,54 @@ fi
 [[ -n "$PROXY_CIDR" ]] || { error "Could not resolve the proxy subnet CIDR"; exit 1; }
 
 use_target_subscription
+
+# The saved name is often a prefix of the real VM. Ask, and store the answer
+# so the key step uses the same name.
+if ! az vm show --resource-group "$TARGET_VM_RG" --name "$TARGET_VM_NAME" --query id -o tsv >/dev/null 2>&1; then
+    error "Target VM not found: $TARGET_VM_NAME in $TARGET_VM_RG"
+    vms=()
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && vms+=("$name")
+    done < <(az vm list --resource-group "$TARGET_VM_RG" --query "[].name" -o tsv)
+    if [[ ${#vms[@]} -eq 0 ]]; then
+        error "No virtual machines in $TARGET_VM_RG"
+        exit 1
+    fi
+    info "Virtual machines in ${TARGET_VM_RG}:"
+    i=1
+    for name in "${vms[@]}"; do
+        printf '  %s) %s\n' "$i" "$name" >/dev/tty
+        i=$((i + 1))
+    done
+    if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+        exit 1
+    fi
+    while true; do
+        read -r -p "Target VM name: " choice </dev/tty 2>/dev/tty || exit 1
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#vms[@]} )); then
+            choice="${vms[$((choice - 1))]}"
+        fi
+        found=false
+        for name in "${vms[@]}"; do
+            if [[ "$choice" == "$name" ]]; then
+                found=true
+                break
+            fi
+        done
+        if [[ "$found" == true ]]; then
+            TARGET_VM_NAME="$choice"
+            export TARGET_VM_NAME
+            state_file="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.state.json"
+            if [[ -f "$state_file" ]]; then
+                set_config_value "$state_file" TARGET_VM_NAME "$TARGET_VM_NAME"
+            fi
+            info "Using target VM: $TARGET_VM_NAME"
+            break
+        fi
+        warn "Choose one of: ${vms[*]}"
+    done
+fi
+
 NIC_ID="$(az vm show --resource-group "$TARGET_VM_RG" --name "$TARGET_VM_NAME" \
     --query "networkProfile.networkInterfaces[0].id" -o tsv)"
 [[ -n "$NIC_ID" ]] || { error "Target VM not found: $TARGET_VM_NAME in $TARGET_VM_RG"; exit 1; }
@@ -50,10 +98,32 @@ fi
 
 NSG_RG="$(echo "$NSG_ID" | sed -n 's|.*/resourceGroups/\([^/]*\)/.*|\1|p')"
 NSG_NAME="${NSG_ID##*/}"
-az network nsg rule create --resource-group "$NSG_RG" --nsg-name "$NSG_NAME" \
-    --name AllowCdxProxySsh --priority 1000 --direction Inbound --access Allow \
-    --protocol Tcp --destination-port-ranges 22 \
-    --source-address-prefixes "$PROXY_CIDR" --only-show-errors >/dev/null
+if az network nsg rule show --resource-group "$NSG_RG" --nsg-name "$NSG_NAME" \
+    --name AllowCdxProxySsh >/dev/null 2>&1; then
+    az network nsg rule update --resource-group "$NSG_RG" --nsg-name "$NSG_NAME" \
+        --name AllowCdxProxySsh --source-address-prefixes "$PROXY_CIDR" \
+        --only-show-errors >/dev/null
+else
+    priority=1000
+    used="$(az network nsg rule list --resource-group "$NSG_RG" --nsg-name "$NSG_NAME" \
+        --query "[].priority" -o tsv)"
+    while printf '%s\n' "$used" | grep -qx "$priority"; do
+        priority=$((priority + 1))
+        if (( priority > 4096 )); then
+            error "No free priority on NSG $NSG_NAME"
+            az account set --subscription "$SUBSCRIPTION_ID"
+            exit 1
+        fi
+    done
+    if ! az network nsg rule create --resource-group "$NSG_RG" --nsg-name "$NSG_NAME" \
+        --name AllowCdxProxySsh --priority "$priority" --direction Inbound --access Allow \
+        --protocol Tcp --destination-port-ranges 22 \
+        --source-address-prefixes "$PROXY_CIDR" --only-show-errors >/dev/null; then
+        error "Could not add AllowCdxProxySsh on $NSG_NAME"
+        az account set --subscription "$SUBSCRIPTION_ID"
+        exit 1
+    fi
+fi
 ok "NSG $NSG_NAME allows TCP 22 from $PROXY_CIDR"
 az account set --subscription "$SUBSCRIPTION_ID"
 

@@ -25,7 +25,8 @@ if [[ -z "$SSHPIPER_IP" || -z "$VMPROXY_IP" ]]; then
 fi
 
 # The remote script is built locally so the current IPs are baked in.
-REMOTE_SCRIPT="set -euo pipefail
+# Azure runs it with /bin/sh. On Ubuntu that is dash, which rejects pipefail.
+REMOTE_SCRIPT="set -eu
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq socat netcat-openbsd

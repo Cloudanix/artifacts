@@ -17,7 +17,7 @@ The jump VM forwards ports 2222 and 8079 on loopback only. Those ports are not o
 | Add a VM in a VNet already peered to the hub | **Onboard (already-peered VNet)** |
 | Add a VM in a new or unpeered VNet | **Onboard (new VNet)** |
 
-New VNet addresses are `10.30.0.0/16`: jump `10.30.1.0/24`, proxy `10.30.2.0/24`, spare `10.30.3.0/24`. That range must not overlap the target VNet.
+New VNet asks for a hub CIDR. The default is `10.30.0.0/16`: jump `.1.0/24`, proxy `.2.0/24`, spare `.3.0/24`. That range must not overlap the target VNet.
 
 Options 3 and 4 reuse the hub. Use the same name prefix as the hub install. They do not create another jump VM or another set of containers.
 
@@ -43,11 +43,11 @@ The one-line installer does not offer `azure-jit-vm` yet.
 **New VNet and Existing VNet**
 
 - Hub subscription ID and region
-- Name prefix, 3–12 characters, a lowercase letter then letters or digits (default `cdxjit`)
-- Your public IP as a CIDR, for example `203.0.113.10/32`. `0.0.0.0/0` is rejected
-- Your Entra object ID: `az ad signed-in-user show --query id -o tsv`
-- A break-glass SSH public key file for the jump VM (default `~/.ssh/id_ed25519.pub`)
-- A registry in your subscription (login server and resource ID). Setup asks for the image tag with the other answers, then imports the three proxy images at that tag from `cdxjitcentral.azurecr.io`. The containers run the same tag. `latest` is rejected. Do not use `cdxjitcentral` as that registry.
+- Name prefix, 3–12 characters, a lowercase letter then letters or digits (default `cdxjit`). Use the same prefix when you add another VM to this hub
+- A VPN CIDR for SSH to the jump VM, if you have one. Otherwise the jump VM allows SSH from `0.0.0.0/0`
+- The signed-in Entra user is the default operator
+- A jump VM SSH key created at `~/.ssh/cdx-azure-jit-jump`
+- Registry login server (default `cdxjitcentral.azurecr.io`). The resource ID is looked up from that name. Setup asks for the image tag with the other answers, then imports the three proxy images at that tag. The containers run the same tag. `latest` is rejected. When the registry is already `cdxjitcentral`, the images are not copied.
 - Cloudanix API base URL (default `https://api.cloudanix.com`) and data center (`US`, `IN`, or `MC1`)
 - `CDX_AUTH_TOKEN` and `CDX_SIGNATURE_SECRET_KEY`
 

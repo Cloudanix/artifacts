@@ -42,13 +42,21 @@ CDX_JUMP_TAG_ARGS=(owner=cloudanix service=jump-box purpose=cdx-jit-vm "${CDX_AS
 
 # apply_asset_tags ID [ID...]
 #   Adds the asset tags without removing tags already on the resource.
+#   Peerings, subnets, and NSG rules have no tags property. Skip them.
 apply_asset_tags() {
-    local id
+    local id failed=0
     for id in "$@"; do
         [[ -n "$id" && "$id" != "null" ]] || continue
-        az resource tag --ids "$id" --is-incremental \
-            --tags "${CDX_ASSET_TAG_ARGS[@]}" --only-show-errors >/dev/null
+        case "$id" in
+            */virtualNetworkPeerings/*|*/subnets/*|*/securityRules/*) continue ;;
+        esac
+        if ! az resource tag --ids "$id" --is-incremental \
+            --tags "${CDX_ASSET_TAG_ARGS[@]}" --only-show-errors >/dev/null; then
+            error "Could not tag $id"
+            failed=1
+        fi
     done
+    return "$failed"
 }
 
 # apply_jump_tags VM_ID
@@ -223,4 +231,55 @@ set_secret_file() {
 #   existing-vnet does not ask for one, so the hub subscription is the default.
 use_target_subscription() {
     az account set --subscription "${TARGET_SUBSCRIPTION_ID:-$SUBSCRIPTION_ID}"
+}
+
+# ensure_aad_ssh_login
+#   AADSSHLoginForLinux refuses to install until the VM has a system-assigned
+#   identity. A failed install still leaves an extension resource behind, so
+#   "show succeeds" is not enough: the provisioning state has to be Succeeded.
+ensure_aad_ssh_login() {
+    local principal="" attempt state=""
+    principal="$(az vm identity show --resource-group "$RG" --name "$JUMP_VM" \
+        --query principalId -o tsv 2>/dev/null || true)"
+    if [[ -z "$principal" || "$principal" == "None" ]]; then
+        info "Enabling system-assigned identity on $JUMP_VM"
+        if ! az vm identity assign --resource-group "$RG" --name "$JUMP_VM" \
+            --only-show-errors >/dev/null; then
+            error "Could not enable a system-assigned identity on $JUMP_VM"
+            return 1
+        fi
+        for attempt in 1 2 3 4 5 6; do
+            principal="$(az vm identity show --resource-group "$RG" --name "$JUMP_VM" \
+                --query principalId -o tsv 2>/dev/null || true)"
+            if [[ -n "$principal" && "$principal" != "None" ]]; then
+                break
+            fi
+            sleep 10
+        done
+    fi
+    if [[ -z "$principal" || "$principal" == "None" ]]; then
+        error "Jump VM has no system-assigned identity. Entra SSH login requires one."
+        return 1
+    fi
+    ok "System-assigned identity ready on $JUMP_VM"
+
+    state="$(az vm extension show --resource-group "$RG" --vm-name "$JUMP_VM" \
+        --name AADSSHLoginForLinux --query provisioningState -o tsv 2>/dev/null || true)"
+    if [[ "$state" == "Succeeded" ]]; then
+        ok "AADSSHLoginForLinux extension exists"
+        return 0
+    fi
+    if [[ -n "$state" ]]; then
+        info "Removing AADSSHLoginForLinux (state: $state)"
+        az vm extension delete --resource-group "$RG" --vm-name "$JUMP_VM" \
+            --name AADSSHLoginForLinux --only-show-errors >/dev/null
+    fi
+    info "Installing AADSSHLoginForLinux. This takes a few minutes."
+    if ! az vm extension set --resource-group "$RG" --vm-name "$JUMP_VM" \
+        --publisher Microsoft.Azure.ActiveDirectory --name AADSSHLoginForLinux \
+        --only-show-errors >/dev/null; then
+        error "AADSSHLoginForLinux failed to install"
+        return 1
+    fi
+    ok "AADSSHLoginForLinux extension installed"
 }

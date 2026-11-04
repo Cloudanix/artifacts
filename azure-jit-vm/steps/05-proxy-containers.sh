@@ -110,13 +110,17 @@ deploy_container() {
     ok "Container group created: $name"
 }
 
-deploy_container "$ACI_SSHPIPER" "$SSHPIPER_IMAGE" 2222 true
-deploy_container "$ACI_VMPROXY" "$VMPROXY_IMAGE" 8079 true
-deploy_container "$ACI_LOGGING" "$LOGGING_IMAGE" 8079 false
+deploy_container "$ACI_SSHPIPER" "$SSHPIPER_IMAGE" 2222 true || exit 1
+deploy_container "$ACI_VMPROXY" "$VMPROXY_IMAGE" 8079 true || exit 1
+deploy_container "$ACI_LOGGING" "$LOGGING_IMAGE" 8079 false || exit 1
 
-SSHPIPER_PRIVATE_IP="$(az container show --resource-group "$RG" --name "$ACI_SSHPIPER" --query ipAddress.ip -o tsv)"
-VMPROXY_PRIVATE_IP="$(az container show --resource-group "$RG" --name "$ACI_VMPROXY" --query ipAddress.ip -o tsv)"
-LOGGING_PRIVATE_IP="$(az container show --resource-group "$RG" --name "$ACI_LOGGING" --query ipAddress.ip -o tsv)"
+SSHPIPER_PRIVATE_IP="$(az container show --resource-group "$RG" --name "$ACI_SSHPIPER" --query ipAddress.ip -o tsv 2>/dev/null || true)"
+VMPROXY_PRIVATE_IP="$(az container show --resource-group "$RG" --name "$ACI_VMPROXY" --query ipAddress.ip -o tsv 2>/dev/null || true)"
+LOGGING_PRIVATE_IP="$(az container show --resource-group "$RG" --name "$ACI_LOGGING" --query ipAddress.ip -o tsv 2>/dev/null || true)"
+if [[ -z "$SSHPIPER_PRIVATE_IP" || -z "$VMPROXY_PRIVATE_IP" || -z "$LOGGING_PRIVATE_IP" ]]; then
+    error "A container group has no private IP. sshpiper=${SSHPIPER_PRIVATE_IP:-missing} vmproxy=${VMPROXY_PRIVATE_IP:-missing} logging=${LOGGING_PRIVATE_IP:-missing}"
+    exit 1
+fi
 ok "Private IPs: sshpiper=$SSHPIPER_PRIVATE_IP vmproxy=$VMPROXY_PRIVATE_IP logging=$LOGGING_PRIVATE_IP"
 
 echo "OUTPUT:SSHPIPER_PRIVATE_IP=$SSHPIPER_PRIVATE_IP"
