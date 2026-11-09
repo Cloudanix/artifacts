@@ -93,21 +93,31 @@ hub_setup_complete() {
 # run_bulk_onboard
 #   Asks for a CSV, runs bulk-onboard.sh as a dry run first, and only does the
 #   real run if the user confirms. Never writes .state.json.
+#   A machine with no saved hub still works: it asks for the hub subscription
+#   and name prefix, which is what another terminal needs after someone else
+#   already built the hub.
 run_bulk_onboard() {
-    local csv_path
+    local csv_path sub prefix current
+    local -a hub_args=()
+    if [[ ! -f "$STATE_FILE" ]] || ! jq -e '.config.SUBSCRIPTION_ID and .config.NAME_PREFIX' "$STATE_FILE" >/dev/null 2>&1; then
+        current="$(az account show --query id -o tsv 2>/dev/null || true)"
+        sub="$(prompt_with_default "Hub subscription ID" "$current")"
+        prefix="$(prompt_with_default "Hub name prefix" "cdxjit")"
+        hub_args=(--hub-subscription "$sub" --name-prefix "$prefix")
+    fi
     csv_path="$(prompt_with_default "Path to the CSV of VMs to onboard" "./vms.csv")"
     csv_path="${csv_path/#\~/$HOME}"
     [[ -f "$csv_path" ]] || { error "CSV not found: $csv_path"; return 1; }
 
     if prompt_yes_no "Dry run first? It checks every row and changes nothing" "y"; then
-        bash "$SCRIPT_DIR/bulk-onboard.sh" --csv "$csv_path" --dry-run || return 1
+        bash "$SCRIPT_DIR/bulk-onboard.sh" --csv "$csv_path" "${hub_args[@]}" --dry-run || return 1
         echo ""
         if ! prompt_yes_no "Run for real now?" "n"; then
             info "Stopped. Nothing was changed in Azure."
             return 0
         fi
     fi
-    bash "$SCRIPT_DIR/bulk-onboard.sh" --csv "$csv_path"
+    bash "$SCRIPT_DIR/bulk-onboard.sh" --csv "$csv_path" "${hub_args[@]}"
 }
 
 # finished_hub_menu
@@ -207,10 +217,16 @@ fi
 if [[ -z "$SELECTED_SCOPE_MODE" ]]; then
     # prompt_selection prints the menu and returns its choice in CDX_SELECTED,
     # so it must not run inside $(...).
-    prompt_selection "Select deployment scope:" "${SCOPE_MODE_LABELS[@]}" || {
+    # Bulk is not a scope mode. It stays on this menu so a second terminal can
+    # onboard VMs after someone else already built the hub.
+    prompt_selection "Select deployment scope:" "${SCOPE_MODE_LABELS[@]}" "$BULK_ONBOARD_LABEL" || {
         error "Failed to select scope mode."
         exit 1
     }
+    if [[ "$CDX_SELECTED" == "$BULK_ONBOARD_LABEL" ]]; then
+        run_bulk_onboard || exit 1
+        exit 0
+    fi
     SELECTED_LABEL="$CDX_SELECTED"
 
     # Map label back to mode identifier

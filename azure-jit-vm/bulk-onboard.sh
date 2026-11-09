@@ -41,6 +41,8 @@ NONROOT_KEY=""
 ROOT_USER_DEFAULT="root"
 NONROOT_USER_DEFAULT="ubuntu"
 DRY_RUN=false
+HUB_SUB_FLAG=""
+PREFIX_FLAG=""
 
 usage() {
     cat <<EOF
@@ -51,6 +53,8 @@ Usage: ./bulk-onboard.sh --csv PATH [--root-key PATH] [--nonroot-key PATH] [opti
   --nonroot-key PATH      Default non-root key for rows without nonroot_key_path
   --root-user NAME        Default root OS user when the row omits root_user (default: root)
   --nonroot-user NAME     Default non-root OS user when the row omits nonroot_user (default: ubuntu)
+  --hub-subscription ID   Hub subscription. Used when this machine has no .state.json
+  --name-prefix PREFIX    Hub name prefix. Used when this machine has no .state.json
   --dry-run               Check everything and print the plan. Changes nothing.
   -h, --help              Show this help
 
@@ -59,7 +63,7 @@ Every row needs a root key and a non-root key, from its own columns or from the 
 CSV header:
   subscription_id,vm_resource_group,vm_name,region,root_user,nonroot_user,root_key_path,nonroot_key_path,vnet_name,vnet_resource_group
 
-Needs a finished hub install (.state.json with SUBSCRIPTION_ID and NAME_PREFIX).
+Needs a finished hub. .state.json supplies the subscription and prefix, or pass --hub-subscription and --name-prefix.
 EOF
 }
 
@@ -75,6 +79,8 @@ while [[ $# -gt 0 ]]; do
         --root-user) ROOT_USER_DEFAULT="${2:-}"; shift 2 ;;
         --nonroot-user) NONROOT_USER_DEFAULT="${2:-}"; shift 2 ;;
         --dry-run) DRY_RUN=true; shift ;;
+        --hub-subscription) HUB_SUB_FLAG="${2:-}"; shift 2 ;;
+        --name-prefix) PREFIX_FLAG="${2:-}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *)
             error "Unknown argument: $1"
@@ -87,15 +93,23 @@ done
 [[ -n "$CSV_PATH" && -f "$CSV_PATH" ]] || { error "--csv is required and must exist"; usage >&2; exit 1; }
 [[ -z "$ROOT_KEY" || -f "$ROOT_KEY" ]] || { error "--root-key does not exist: $ROOT_KEY"; exit 1; }
 [[ -z "$NONROOT_KEY" || -f "$NONROOT_KEY" ]] || { error "--nonroot-key does not exist: $NONROOT_KEY"; exit 1; }
-[[ -f "$STATE_FILE" ]] || { error "No hub state at $STATE_FILE. Run a hub install first."; exit 1; }
-
 check_prerequisites az jq || exit 1
 
 # Load the hub config into the environment, then the shared helpers. The
 # helpers derive resource names (RG, KV_KEYS, ...) from NAME_PREFIX at load.
-while IFS='=' read -r key value; do
-    export "$key=$value"
-done < <(jq -r '.config | to_entries[] | "\(.key)=\(.value)"' "$STATE_FILE")
+# Flags win over the state file so another machine can name the hub without
+# copying .state.json. This does not write .state.json.
+if [[ -f "$STATE_FILE" ]]; then
+    while IFS='=' read -r key value; do
+        export "$key=$value"
+    done < <(jq -r '.config | to_entries[] | "\(.key)=\(.value)"' "$STATE_FILE")
+fi
+[[ -n "$HUB_SUB_FLAG" ]] && export SUBSCRIPTION_ID="$HUB_SUB_FLAG"
+[[ -n "$PREFIX_FLAG" ]] && export NAME_PREFIX="$PREFIX_FLAG"
+if [[ -z "${SUBSCRIPTION_ID:-}" || -z "${NAME_PREFIX:-}" ]]; then
+    error "No hub subscription or name prefix. Pass --hub-subscription and --name-prefix, or run this from a finished hub install."
+    exit 1
+fi
 source "$SCRIPT_DIR/steps/_helpers.sh"
 
 require_env SUBSCRIPTION_ID NAME_PREFIX || exit 1
