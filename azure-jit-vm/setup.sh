@@ -3,7 +3,10 @@
 # Azure JIT VM — Master Orchestrator
 # =============================================================================
 # Usage:
-#   ./setup.sh              — Run the setup wizard (resumes from .state.json)
+#   ./setup.sh              — Run the setup wizard (resumes from .state.json).
+#                             A finished hub offers bulk onboard instead of resume.
+#   ./setup.sh --share      — Print the hub details Cloudanix needs (no secrets)
+#   ./setup.sh --cleanup    — Remove the hub resource group and peerings this setup created
 #   ./refresh-forwarders.sh — Re-point jump-VM forwarders after an ACI replacement
 # =============================================================================
 set -euo pipefail
@@ -24,6 +27,116 @@ source "$SCRIPT_DIR/config.sh"
 
 # State file location
 STATE_FILE="$SCRIPT_DIR/.state.json"
+
+# =============================================================================
+# ARGUMENT PARSING
+# =============================================================================
+
+MODE_ARG=""
+for _arg in "$@"; do
+    case "$_arg" in
+        --share|--cleanup) MODE_ARG="$_arg" ;;
+        *)
+            error "Unknown argument: $_arg"
+            echo "Usage: ./setup.sh [--share|--cleanup]" >&2
+            exit 1
+            ;;
+    esac
+done
+
+if [[ "$MODE_ARG" == "--share" ]]; then
+    check_prerequisites "${PREREQUISITES[@]}" || exit 1
+    cdx_share_summary "$STATE_FILE" "$SETUP_TYPE"
+    exit $?
+fi
+
+# =============================================================================
+# CLEANUP MODE
+# =============================================================================
+
+if [[ "$MODE_ARG" == "--cleanup" ]]; then
+    check_prerequisites "${PREREQUISITES[@]}" || exit 1
+    echo ""
+    echo -e "${_CLR_BOLD}=== Cleanup: $SETUP_DISPLAY_NAME ===${_CLR_RESET}"
+    echo ""
+    if [[ -f "$STATE_FILE" ]] && load_state "$STATE_FILE" >/dev/null 2>&1; then
+        info "Found setup state: $STATE_FILE"
+    else
+        info "No (valid) state file. The cleanup script will ask for the name prefix."
+    fi
+    echo ""
+    warn "This removes the hub resource group and the peerings this setup created."
+    if ! prompt_yes_no "Proceed with cleanup?" "n"; then
+        info "Cleanup cancelled."
+        exit 0
+    fi
+    source "$SCRIPT_DIR/cleanup/cleanup.sh"
+    exit 0
+fi
+
+# =============================================================================
+# FINISHED HUB MENU
+# =============================================================================
+
+# hub_setup_complete SCOPE
+#   True when a hub install (new-vnet or existing-vnet) has every step done.
+#   06-jump-forwarders exists only in the hub scopes, so an onboard-only state
+#   file falls through to the normal resume prompt.
+hub_setup_complete() {
+    local scope="$1" step_id
+    is_step_complete "$STATE_FILE" "06-jump-forwarders" || return 1
+    for step_id in ${STEPS_FOR_MODE[$scope]:-}; do
+        is_step_complete "$STATE_FILE" "$step_id" || return 1
+    done
+}
+
+# run_bulk_onboard
+#   Asks for a CSV, runs bulk-onboard.sh as a dry run first, and only does the
+#   real run if the user confirms. Never writes .state.json.
+run_bulk_onboard() {
+    local csv_path
+    csv_path="$(prompt_with_default "Path to the CSV of VMs to onboard" "./vms.csv")"
+    csv_path="${csv_path/#\~/$HOME}"
+    [[ -f "$csv_path" ]] || { error "CSV not found: $csv_path"; return 1; }
+
+    if prompt_yes_no "Dry run first? It checks every row and changes nothing" "y"; then
+        bash "$SCRIPT_DIR/bulk-onboard.sh" --csv "$csv_path" --dry-run || return 1
+        echo ""
+        if ! prompt_yes_no "Run for real now?" "n"; then
+            info "Stopped. Nothing was changed in Azure."
+            return 0
+        fi
+    fi
+    bash "$SCRIPT_DIR/bulk-onboard.sh" --csv "$csv_path"
+}
+
+# finished_hub_menu
+#   Shown when the saved hub setup is complete, so there is nothing to resume.
+#   Bulk onboard keeps the hub. Start over deletes the state after a confirm.
+finished_hub_menu() {
+    prompt_selection "The hub setup is complete. What do you want to do?" \
+        "$BULK_ONBOARD_LABEL" \
+        "Start over (deletes the saved hub state)" \
+        "Exit" || exit 1
+    case "$CDX_SELECTED" in
+        "$BULK_ONBOARD_LABEL")
+            run_bulk_onboard || exit 1
+            exit 0
+            ;;
+        Start*)
+            if prompt_yes_no "This deletes the saved hub state. Start over?" "n"; then
+                rm -f "$STATE_FILE"
+                info "Previous state cleared."
+            else
+                info "Nothing changed."
+                exit 0
+            fi
+            ;;
+        *)
+            exit 0
+            ;;
+    esac
+}
 
 # =============================================================================
 # MAIN SETUP FLOW
@@ -62,7 +175,9 @@ if [[ -f "$STATE_FILE" ]]; then
         info "Found existing setup state (scope: $existing_label)"
         echo ""
 
-        if prompt_yes_no "Resume from where you left off?" "y"; then
+        if hub_setup_complete "$existing_scope"; then
+            finished_hub_menu
+        elif prompt_yes_no "Resume from where you left off?" "y"; then
             RESUME_MODE=true
             SELECTED_SCOPE_MODE="$existing_scope"
         else

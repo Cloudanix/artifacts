@@ -16,10 +16,11 @@ The jump VM forwards ports 2222 and 8079 on loopback only. Those ports are not o
 | Run the proxy in a VNet you already have | **Existing VNet** |
 | Add a VM in a VNet already peered to the hub | **Onboard (already-peered VNet)** |
 | Add a VM in a new or unpeered VNet | **Onboard (new VNet)** |
+| Many VMs, one shared root key and one shared non-root key | **Bulk onboard** (finished hub menu, or `./bulk-onboard.sh`) |
 
-New VNet asks for a hub CIDR. The default is `10.30.0.0/16`: jump `.1.0/24`, proxy `.2.0/24`, spare `.3.0/24`. That range must not overlap the target VNet.
+New VNet asks for a hub CIDR. The default is `10.30.0.0/16`: jump `.1.0/24`, proxy `.2.0/24`, spare `.3.0/24`. It must be a `/16` and it must not overlap the target VNet.
 
-Options 3 and 4 reuse the hub. Use the same name prefix as the hub install. They do not create another jump VM or another set of containers.
+Onboard and bulk reuse the hub. Use the same name prefix as the hub install. They do not create another jump VM or another set of containers. Bulk appears when you run `./setup.sh` again after every hub step is complete.
 
 ## Install and run
 
@@ -36,7 +37,7 @@ Hub installs (New VNet and Existing VNet) need those two exports. Onboard option
 
 The wizard asks for every non-secret value up front, prints a summary, then runs the steps. If a step fails, fix the cause and run `./setup.sh` again. Choose resume. Completed steps are skipped.
 
-The one-line installer does not offer `azure-jit-vm` yet.
+When every hub step is complete, `./setup.sh` shows **Bulk onboard VMs from a CSV**, **Start over**, and **Exit** instead of resume. Bulk asks for the CSV, runs a dry run, then asks before it changes Azure. It does not rewrite `.state.json`.
 
 ## What you'll need handy
 
@@ -73,7 +74,55 @@ The last step of every scope stores the target private key in the keys vault `{p
 
 The secret name is `<vm-name>-<os-user>`. Dots and underscores become hyphens. A second OS user on the same VM is another run of an onboard scope with a different OS user. That writes a second secret and leaves the first one in place. Two people who log in as the same OS user share that one key.
 
-You can add more keys later by re-running and choosing an onboard scope.
+You can add more keys later by re-running and choosing an onboard scope, or with bulk onboard when many VMs share two keys.
+
+## Create the user on the target VM
+
+The proxy logs in as the OS user you name during setup. Cloudanix records which person opened the session. The VM still needs its own account and a public key.
+
+Create one OS user per access level. People who need the same rights share that user. A person who needs sudo gets a second user and a second key, not a shared root login.
+
+On the target VM, as an admin:
+
+```bash
+sudo adduser --disabled-password --gecos "" jituser
+sudo mkdir -p /home/jituser/.ssh
+sudo chmod 700 /home/jituser/.ssh
+```
+
+Generate the key on your own machine, not on the VM. The private key must have an empty passphrase. The proxy cannot type one.
+
+```bash
+ssh-keygen -t ed25519 -f ./jituser -N "" -C "jituser"
+```
+
+Install only the public key on the VM:
+
+```bash
+sudo tee /home/jituser/.ssh/authorized_keys < ./jituser.pub >/dev/null
+sudo chown -R jituser:jituser /home/jituser/.ssh
+sudo chmod 600 /home/jituser/.ssh/authorized_keys
+```
+
+sshd should allow public keys and refuse passwords and root login: `PubkeyAuthentication yes`, `PasswordAuthentication no`, `PermitRootLogin no`.
+
+### Root and non-root accounts
+
+- **Never use root as the JIT user.** Root login is off, and a root session through the proxy would have no per-person limit.
+- **The JIT user is non-root with no sudo.** Every command in the session is recorded. Give the account only what the work needs.
+- **Do not use the VM's admin account as the JIT user.** The `azureuser` default in setup is usually the provisioning account. On Ubuntu images it typically has passwordless sudo, so a JIT session on it is a root session. Set the OS user to a dedicated account.
+- **Sudo for a person who needs it:** give that person a separate non-root account with sudo limited to the commands they need, in `/etc/sudoers.d/<name>`. Check the file with `sudo visudo -cf /etc/sudoers.d/<name>`. Avoid `ALL=(ALL) NOPASSWD: ALL` except for a platform admin. That account gets its own key and its own onboard run.
+- **Keep one admin account for break-glass only.** Its key stays out of the JIT keys vault, so JIT access cannot reach it.
+- **Check the account after you create it:**
+
+```bash
+sudo passwd -S jituser    # no usable password (NP or L)
+sudo -l -U jituser        # no sudo rights, or only the commands you listed
+```
+
+- **When access ends,** lock the account (`sudo usermod -L jituser`), delete `/home/jituser/.ssh/authorized_keys`, and remove both secrets from the keys vault.
+
+Run an onboard scope. The OS user is `jituser` and the private key path is `./jituser`. Setup stores that key as `<vmId>-jituser` and `<vm-name>-jituser`. After both secrets are in the keys vault, delete `./jituser` from your machine. The VM keeps the public key only.
 
 ## What each scope creates
 
@@ -95,6 +144,36 @@ You can add more keys later by re-running and choosing an onboard scope.
 **Onboard (already-peered)** runs steps 9 and 10 only.
 
 **Onboard (new VNet)** runs steps 7 through 10.
+
+**Bulk onboard** does not run those steps. For each CSV row it reuses a peering to that VNet when one exists, allows TCP 22 from the proxy subnet, and stores the root key and the non-root key. See [Bulk onboard a fleet](#bulk-onboard-a-fleet).
+
+## Bulk onboard a fleet
+
+Use this after the hub setup is complete, when one environment has many VMs and every VM uses the same root key and the same non-root key.
+
+```bash
+cd azure-jit-vm
+./bulk-onboard.sh --csv ./vms.csv --dry-run
+./bulk-onboard.sh --csv ./vms.csv
+```
+
+`--root-key` and `--nonroot-key` fill in any row that leaves the path columns empty. `--root-user` defaults to `root`. `--nonroot-user` defaults to `ubuntu`.
+
+Header names are case-insensitive. Required columns are `subscription_id`, `vm_resource_group`, and `vm_name`. Leave the VNet columns empty to take the VNet from the VM's NIC.
+
+```csv
+subscription_id,vm_resource_group,vm_name,region,root_user,nonroot_user,root_key_path,nonroot_key_path,vnet_name,vnet_resource_group
+00000000-0000-0000-0000-000000000000,app-rg,app-vm-01,eastus2,root,ubuntu,/keys/fleet-root.pem,/keys/fleet-ubuntu.pem,,
+```
+
+Each user is stored twice in `{prefix}-jitkeys-kv`. Dots and underscores become hyphens.
+
+| Secret name | Example for `app-vm-01`, user `ubuntu` |
+| --- | --- |
+| `<vmId>-<user>` | `815b755a-b3d3-4c03-a50f-96e8366e484d-ubuntu` |
+| `<vm-name>-<user>` | `app-vm-01-ubuntu` |
+
+A row with `root` and `ubuntu` writes four secrets. A new hub peering is `cdx-{prefix}-<hash>`. The target peering is `cdx-{prefix}-to-hub`. An existing peering to that VNet is kept. Progress is `.bulk-onboard-progress.json`. It holds no key material.
 
 ## Tags
 
@@ -118,9 +197,30 @@ A VNet, subnet, or network security group you already owned is not retagged. Sub
 
 If you replace a container group, its private IP changes. From the same directory, run `./refresh-forwarders.sh`.
 
-There is no `--share` command yet. Send Cloudanix the resource group, jump VM name, jump public IP, subscription ID, both Key Vault names, and the name prefix.
+Send the hub details to Cloudanix:
 
-There is no `--cleanup` command yet. Delete the peering named `cdx-{prefix}-to-hub` in the target VNet first, then delete the resource group `{prefix}-jit-vm-rg`. Deleting the group does not remove that peering, your registry, or the target VM. An NSG rule named `AllowCdxProxySsh` on a target group you already owned is left in place. Remove it yourself if you want it gone.
+```bash
+cd ~/.cdx-jit/azure-jit-vm && ./setup.sh --share
+```
+
+That prints the subscription, the jump VM resource group and tags, the two role definition IDs, and the log container name. It does not print keys or tokens. Paste that JSON to Cloudanix.
+
+To remove the hub:
+
+```bash
+cd ~/.cdx-jit/azure-jit-vm && ./setup.sh --cleanup
+```
+
+The script asks you to confirm, then type the resource group name. It deletes:
+
+- The peering `cdx-{prefix}-to-hub` in the target VNet, and `cdx-{prefix}-to-target` on the hub VNet
+- Bulk peerings recorded in `.bulk-onboard-progress.json`: `cdx-{prefix}-to-hub` on each target VNet, and `cdx-{prefix}-<hash>` on the hub. A peering that already existed under another name is left in place
+- The `AcrPull` role the proxy identity holds on your registry
+- The resource group `{prefix}-jit-vm-rg`. That removes the hub VNet, jump VM, containers, storage account, both Key Vaults, and the managed identity
+
+**The storage account holds every session recording.** Deleting it deletes the recordings in `jit-vm-logs`. Copy out any you need first.
+
+It does not delete the target VM, your registry images, your existing VNet, or the custom roles. It prints the items to remove by hand: the `AllowCdxProxySsh` rule on the target network security group, the `AllowOperatorSSH` rule on a customer's network security group, and the two Key Vault names if you want to reuse them. Key Vaults stay in soft-delete until the retention ends.
 
 ## Roles the connecting user needs
 

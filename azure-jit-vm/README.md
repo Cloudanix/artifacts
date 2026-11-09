@@ -58,11 +58,21 @@ contains subscription and resource names only, no secrets.
 - **Rotate Cloudanix credentials**: export the new values, run `./setup.sh`
   (it skips completed steps), then restart the containers so they reload.
 - **Add a target VM**: finish the target setup in the Cloudanix console, then
-  store its SSH private key in the keys vault.
+  store its SSH private key in the keys vault. For a fleet that shares one
+  root key and one non-root key, run `./setup.sh` after the hub is complete
+  and choose bulk onboard, or run `./bulk-onboard.sh --csv ./vms.csv`.
+  Secrets are `<vmId>-<user>` and `<vm-name>-<user>`.
+- **Send hub details to Cloudanix**: `./setup.sh --share` prints the
+  subscription, resource group, role IDs, and log container. No secrets.
 
 ## Known limits
 
 - Step 05 does not update an existing container group. Delete it to change its
   image.
-- No cleanup command yet. Remove the resource group in the portal or with
-  `az group delete`.
+- **Remove the hub**: `./setup.sh --cleanup` deletes the hub resource group and
+  the peerings, including bulk peerings named `cdx-{prefix}-<hash>` on the hub
+  and `cdx-{prefix}-to-hub` on each recorded target VNet. It asks for the
+  resource group name to confirm. Session
+  recordings in the storage account are deleted with it. Items outside the
+  group (target NSG rule, customer NSG rule, Key Vault soft-delete) are printed
+  for you to remove.

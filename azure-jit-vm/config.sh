@@ -22,6 +22,10 @@ SCOPE_MODE_LABELS=(
     "Onboard VM in a new VNet (reuse the hub, create peering)"
 )
 
+# Not a scope mode. A finished hub offers this instead of the resume prompt
+# (see finished_hub_menu in setup.sh). It runs bulk-onboard.sh and keeps the hub state.
+BULK_ONBOARD_LABEL="Bulk onboard VMs from a CSV (reuses this hub)"
+
 # =============================================================================
 # STEPS PER SCOPE MODE
 # =============================================================================

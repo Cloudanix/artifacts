@@ -548,6 +548,42 @@ cdx_share_summary() {
                     }
                 }]'
             ;;
+        azure-jit-vm)
+            local sub prefix rg log_container read_id ssh_id
+            sub=$(get_config_value "$state_file" "SUBSCRIPTION_ID")
+            prefix=$(get_config_value "$state_file" "NAME_PREFIX")
+            log_container=$(get_config_value "$state_file" "LOG_CONTAINER")
+            [[ -z "$log_container" ]] && log_container="jit-vm-logs"
+            if [[ -z "$sub" || -z "$prefix" ]]; then
+                error "--share needs a finished hub setup. SUBSCRIPTION_ID or NAME_PREFIX is missing from the state file."
+                return 1
+            fi
+            rg="${prefix}-jit-vm-rg"
+            az account set --subscription "$sub" >/dev/null
+            read_id=$(az role definition list --name "CDX JIT VM Read Access" \
+                --scope "/subscriptions/${sub}" --query "[0].id" -o tsv)
+            ssh_id=$(az role definition list --name "CDX JIT VM SSH Access" \
+                --scope "/subscriptions/${sub}" --query "[0].id" -o tsv)
+            if [[ -z "$read_id" || -z "$ssh_id" ]]; then
+                error "CDX JIT VM roles were not found in subscription $sub. Run the hub setup first."
+                return 1
+            fi
+            jq -n \
+                --arg sub "$sub" --arg rg "$rg" --arg logs "$log_container" \
+                --arg read_id "$read_id" --arg ssh_id "$ssh_id" \
+                '[{
+                    jump_server_access_roles: [
+                        {role_name: "CDX JIT VM Read Access", scoped_access: false, role_identifier: $read_id},
+                        {role_name: "CDX JIT VM SSH Access", scoped_access: true, role_identifier: $ssh_id}
+                    ],
+                    jump_server_account: {domain_type: "AZURE", account_identifier: $sub},
+                    jump_server_details: {
+                        server_tags: {owner: "cloudanix", service: "jump-box", purpose: "cdx-jit-vm"},
+                        server_resource_group: $rg
+                    },
+                    jit_log_storage: $logs
+                }]'
+            ;;
         *)
             error "Unknown setup type '$setup_type' for --share."
             return 1
