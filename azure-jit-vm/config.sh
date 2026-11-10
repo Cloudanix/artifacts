@@ -2,9 +2,10 @@
 # =============================================================================
 # Azure JIT VM — Configuration Schema
 # =============================================================================
-# Non-secret inputs only. These are saved to .state.json.
-# CDX_AUTH_TOKEN and CDX_SIGNATURE_SECRET_KEY are never saved: export them in
-# the shell before a hub install. Step 04 reads them from the environment.
+# Saved answers go to .state.json.
+# CDX_AUTH_TOKEN and CDX_SIGNATURE_SECRET_KEY are asked with the other Cloudanix
+# fields on a hub install, then kept in the shell only. They are not written
+# to .state.json. Step 04 reads them from the environment.
 # =============================================================================
 
 SETUP_TYPE="azure-jit-vm"
@@ -111,8 +112,11 @@ CONFIG_FIELDS=(
     "SSHPIPER_IMAGE|nonempty|cloudanix/ecr-aws-jit-vm-sshpiper|sshpiper image path in the registry|new-vnet,existing-vnet|false"
     "VMPROXY_IMAGE|nonempty|cloudanix/ecr-aws-jit-vm-proxyserver|VM proxy server image path in the registry|new-vnet,existing-vnet|false"
     "LOGGING_IMAGE|nonempty|cloudanix/ecr-aws-jit-vm-logging|Command logging image path in the registry|new-vnet,existing-vnet|false"
-    "CDX_API_BASE|nonempty|https://api.cloudanix.com|Cloudanix API base URL|new-vnet,existing-vnet|false"
-    "CDX_DC|nonempty|US|Cloudanix data center (US, IN, or MC1)|new-vnet,existing-vnet|false"
+    "CDX_API_BASE|nonempty|https://api.cloudanix.com|Cloudanix API base URL (CDX_API_BASE)|new-vnet,existing-vnet|false"
+    "CDX_DC|nonempty|US|Cloudanix data center (CDX_DC): US, IN, or MC1|new-vnet,existing-vnet|false"
+    "CDX_SENTRY_DSN|nonempty|none|Sentry DSN (CDX_SENTRY_DSN). Type none to disable|new-vnet,existing-vnet|true"
+    "CDX_AUTH_TOKEN|nonempty||Cloudanix auth token (CDX_AUTH_TOKEN)|new-vnet,existing-vnet|true"
+    "CDX_SIGNATURE_SECRET_KEY|nonempty||Cloudanix signature secret (CDX_SIGNATURE_SECRET_KEY)|new-vnet,existing-vnet|true"
     "LOG_CONTAINER|alphanumeric_dash|jit-vm-logs|Blob container for session recordings|new-vnet,existing-vnet|false"
     "TARGET_VNET_NAME|nonempty||Target VNet name|new-vnet,onboard-new-vnet|false"
     "TARGET_VNET_RG|nonempty||Resource group of the target VNet|new-vnet,onboard-new-vnet|false"

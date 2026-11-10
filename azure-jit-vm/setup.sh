@@ -324,6 +324,19 @@ if [[ "$RESUME_MODE" == false ]]; then
                 set_config_value "$STATE_FILE" "$field_name" "${jump_key}.pub"
                 continue
                 ;;
+            CDX_AUTH_TOKEN|CDX_SIGNATURE_SECRET_KEY)
+                # Asked here with the other Cloudanix fields. Not written to state.
+                while true; do
+                    read -rs -p "$field_prompt: " value
+                    printf '\n'
+                    if [[ -n "$value" ]]; then
+                        export "$field_name=$value"
+                        break
+                    fi
+                    warn "$field_prompt is required."
+                done
+                continue
+                ;;
             ACR_RESOURCE_ID)
                 registry="$(get_config_value "$STATE_FILE" "IMAGE_REGISTRY")"
                 hub_sub="$(get_config_value "$STATE_FILE" "SUBSCRIPTION_ID")"
@@ -351,6 +364,29 @@ if [[ "$RESUME_MODE" == false ]]; then
         done
     done
 
+    # Option 1 (new VNet) can store a key for more than one OS user on the
+    # same target VM. The first user is the two fields above.
+    if [[ "$SELECTED_SCOPE_MODE" == "new-vnet" ]]; then
+        vm_users="$(jq -nc \
+            --arg user "$(get_config_value "$STATE_FILE" "TARGET_VM_OS_USER")" \
+            --arg key "$(get_config_value "$STATE_FILE" "TARGET_SSH_PRIVATE_KEY_FILE")" \
+            '[{user:$user, key:$key}]')"
+        while prompt_yes_no "Add another OS user on this VM?" "n"; do
+            extra_user="$(prompt_with_default "Additional OS user" "")"
+            extra_key="$(prompt_with_default "Path to that user's SSH private key" "")"
+            if [[ -z "$extra_user" || ! -f "$extra_key" ]]; then
+                warn "Need an OS user and a key file that exists."
+                continue
+            fi
+            vm_users="$(printf '%s' "$vm_users" | jq -c \
+                --arg user "$extra_user" --arg key "$extra_key" \
+                '. + [{user:$user, key:$key}]')"
+        done
+        if [[ "$(printf '%s' "$vm_users" | jq 'length')" -gt 1 ]]; then
+            set_config_value "$STATE_FILE" "TARGET_VM_USERS" "$vm_users"
+        fi
+    fi
+
     # Display configuration summary
     echo ""
     step "Configuration Summary"
@@ -374,6 +410,19 @@ if [[ "$RESUME_MODE" == false ]]; then
         fi
 
         stored_value=$(get_config_value "$STATE_FILE" "$field_name")
+        if [[ "$field_name" == "CDX_AUTH_TOKEN" || "$field_name" == "CDX_SIGNATURE_SECRET_KEY" ]]; then
+            if [[ "$field_name" == "CDX_AUTH_TOKEN" ]]; then
+                summary_label="Auth token (CDX_AUTH_TOKEN)"
+            else
+                summary_label="Signature secret (CDX_SIGNATURE_SECRET_KEY)"
+            fi
+            if [[ -n "${!field_name:-}" ]]; then
+                echo "  $summary_label: entered (not saved)"
+            else
+                echo "  $summary_label: missing"
+            fi
+            continue
+        fi
         case "$field_name" in
             SUBSCRIPTION_ID) summary_label="Hub subscription" ;;
             TARGET_SUBSCRIPTION_ID) summary_label="Target subscription" ;;
@@ -390,8 +439,11 @@ if [[ "$RESUME_MODE" == false ]]; then
             SSHPIPER_IMAGE) summary_label="sshpiper image" ;;
             VMPROXY_IMAGE) summary_label="VM proxy image" ;;
             LOGGING_IMAGE) summary_label="Logging image" ;;
-            CDX_API_BASE) summary_label="API base URL" ;;
-            CDX_DC) summary_label="Data center" ;;
+            CDX_API_BASE) summary_label="API base URL (CDX_API_BASE)" ;;
+            CDX_DC) summary_label="Data center (CDX_DC)" ;;
+            CDX_SENTRY_DSN) summary_label="Sentry DSN (CDX_SENTRY_DSN)" ;;
+            CDX_AUTH_TOKEN) summary_label="Auth token (CDX_AUTH_TOKEN)" ;;
+            CDX_SIGNATURE_SECRET_KEY) summary_label="Signature secret (CDX_SIGNATURE_SECRET_KEY)" ;;
             LOG_CONTAINER) summary_label="Log container" ;;
             TARGET_VNET_NAME) summary_label="Target VNet" ;;
             TARGET_VNET_RG) summary_label="Target VNet resource group" ;;
@@ -409,6 +461,12 @@ if [[ "$RESUME_MODE" == false ]]; then
             echo "  $summary_label: $stored_value"
         fi
     done
+
+    extra_users="$(get_config_value "$STATE_FILE" "TARGET_VM_USERS")"
+    if [[ -n "$extra_users" ]]; then
+        echo "  Target OS users:"
+        printf '%s' "$extra_users" | jq -r '.[] | "    \(.user)  \(.key)"'
+    fi
 
     echo ""
     if ! prompt_yes_no "Proceed with these values?" "y"; then

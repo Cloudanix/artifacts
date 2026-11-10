@@ -142,7 +142,7 @@ When every hub step is complete, `./setup.sh` shows **Bulk onboard VMs from a CS
 - The signed-in Entra user is the default operator. Setup fills in that object ID
 - A jump VM SSH key. Setup creates it at `~/.ssh/cdx-azure-jit-jump` when it is missing
 - Registry login server (default `cdxjitcentral.azurecr.io`). The resource ID is looked up from that name. Setup asks for the image tag, then imports `cloudanix/ecr-aws-jit-vm-sshpiper`, `cloudanix/ecr-aws-jit-vm-proxyserver`, and `cloudanix/ecr-aws-jit-vm-logging` at that tag. The containers run the same tag. `latest` is rejected. When the registry is already `cdxjitcentral`, the images are not copied
-- API base URL (default `https://api.cloudanix.com`) and data center (`US`, `IN`, or `MC1`)
+- API base URL (`CDX_API_BASE`), data center (`CDX_DC`), Sentry DSN (`CDX_SENTRY_DSN`, default `none`), auth token (`CDX_AUTH_TOKEN`), and signature secret (`CDX_SIGNATURE_SECRET_KEY`). The token and signature are typed in the form and are not saved to `.state.json`
 - Target VM name, resource group, OS user (default `azureuser`), and the path to its private key
 - For a new peering: target VNet name, its resource group, and the target subscription ID
 
@@ -157,7 +157,7 @@ The proxy looks up the Azure VM id, because validate sends that id as `vmInstanc
 1. `<vmId>-<os-user>`
 2. `<vm-name>-<os-user>`
 
-Dots and underscores in either part become hyphens. Another OS user on the same VM is a second onboard run with a different OS user. That writes a second pair of secrets and leaves the first pair in place.
+Dots and underscores in either part become hyphens. New VNet can add more OS users on that VM in the same run, each with its own key file. An onboard scope stores one user; a second run with a different OS user writes another pair and leaves the first pair in place.
 
 ## What each scope runs
 

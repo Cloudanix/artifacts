@@ -49,8 +49,8 @@ When every hub step is complete, `./setup.sh` shows **Bulk onboard VMs from a CS
 - The signed-in Entra user is the default operator
 - A jump VM SSH key created at `~/.ssh/cdx-azure-jit-jump`
 - Registry login server (default `cdxjitcentral.azurecr.io`). The resource ID is looked up from that name. Setup asks for the image tag with the other answers, then imports the three proxy images at that tag. The containers run the same tag. `latest` is rejected. When the registry is already `cdxjitcentral`, the images are not copied.
-- Cloudanix API base URL (default `https://api.cloudanix.com`) and data center (`US`, `IN`, or `MC1`)
-- `CDX_AUTH_TOKEN` and `CDX_SIGNATURE_SECRET_KEY`
+- Cloudanix API base URL (`CDX_API_BASE`, default `https://api.cloudanix.com`), data center (`CDX_DC`: `US`, `IN`, or `MC1`), and Sentry DSN (`CDX_SENTRY_DSN`, default `none`)
+- `CDX_AUTH_TOKEN` and `CDX_SIGNATURE_SECRET_KEY`, typed with the other answers. They are not saved to `.state.json`
 
 **Existing VNet also**
 
@@ -72,7 +72,7 @@ The last step of every scope stores the target private key in the keys vault `{p
 2. Enter the OS user.
 3. Give the key by file path. The file is passed to Key Vault and is not printed.
 
-The secret name is `<vm-name>-<os-user>`. Dots and underscores become hyphens. A second OS user on the same VM is another run of an onboard scope with a different OS user. That writes a second secret and leaves the first one in place. Two people who log in as the same OS user share that one key.
+The secret name is `<vm-name>-<os-user>` and `<vmId>-<os-user>`. Dots and underscores become hyphens. New VNet asks whether to add another OS user on that same VM, each with its own key file. Onboard scopes still store one user per run; a second run with a different OS user writes another pair and leaves the first in place. Two people who log in as the same OS user share that one key.
 
 You can add more keys later by re-running and choosing an onboard scope, or with bulk onboard when many VMs share two keys.
 
