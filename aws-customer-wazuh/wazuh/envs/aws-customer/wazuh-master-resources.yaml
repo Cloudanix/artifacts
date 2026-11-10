@@ -1,0 +1,113 @@
+# Master: 1 replica on the general node group.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wazuh-manager-master
+  namespace: wazuh
+spec:
+  replicas: 1
+  template:
+    spec:
+      # IRSA SA (created + annotated by infra/deploy.sh) so the cloudanix
+      # integration can read the cdx-central-vm-auth-tokens Secrets Manager secret.
+      # The EKS Pod Identity / IRSA webhook also injects AWS_REGION +
+      # AWS_WEB_IDENTITY_TOKEN_FILE; start-master.sh writes those into
+      # cloudanix-config.json and cloudanix-aws-exports.sh for cron.
+      serviceAccountName: wazuh-manager
+      nodeSelector:
+        workload: general
+      securityContext:
+        fsGroup: 101
+        fsGroupChangePolicy: OnRootMismatch
+      # Fresh PVCs at /var/ossec/{logs,etc,queue} mask the image's directories,
+      # and every one of those gaps is fatal on first boot:
+      #   etc/shared/ar.conf missing -> analysisd FATAL, no alerts.json
+      #   queue/db missing           -> wazuh-db cannot bind queue/db/wdb
+      #   queue/fts missing          -> analysisd CRITICAL (1260) FTS list
+      #   etc/shared/default missing -> wazuh-db "Unable to find the id of the
+      #                                 group 'default'" on every keepalive
+      initContainers:
+        - name: fix-logs-permissions
+          image: public.ecr.aws/docker/library/busybox:1.36
+          command:
+            - sh
+            - -c
+            - >-
+              mkdir -p /var/ossec/logs/alerts
+              /var/ossec/logs/archives
+              /var/ossec/logs/firewall
+              /var/ossec/logs/api
+              /var/ossec/logs/cluster
+              /var/ossec/logs/wazuh
+              /var/ossec/etc/shared
+              /var/ossec/etc/shared/default
+              /var/ossec/queue/db
+              /var/ossec/queue/sockets
+              /var/ossec/queue/alerts
+              /var/ossec/queue/cluster
+              /var/ossec/queue/agent-groups
+              /var/ossec/queue/agent-info
+              /var/ossec/queue/fts
+              /var/ossec/queue/diff
+              /var/ossec/queue/fim
+              /var/ossec/queue/logcollector
+              /var/ossec/queue/rids
+              /var/ossec/queue/syscheck
+              /var/ossec/queue/tasks &&
+              touch /var/ossec/logs/cloudanix-push-alerts.log
+              /var/ossec/etc/shared/ar.conf
+              /var/ossec/queue/fts/fts-queue
+              /var/ossec/queue/fts/hostinfo &&
+              if [ ! -s /var/ossec/etc/shared/default/agent.conf ]; then printf '%s\n' '<agent_config>' '</agent_config>' > /var/ossec/etc/shared/default/agent.conf; fi &&
+              chown -R 999:999 /var/ossec/logs &&
+              chown -R 999:999 /var/ossec/etc/shared &&
+              chown -R 999:999 /var/ossec/queue &&
+              chmod -R 770 /var/ossec/logs/alerts /var/ossec/logs/archives /var/ossec/logs/firewall &&
+              chmod 664 /var/ossec/logs/cloudanix-push-alerts.log &&
+              chmod 755 /var/ossec/etc/shared /var/ossec/etc/shared/default &&
+              chmod 644 /var/ossec/etc/shared/ar.conf &&
+              chmod 640 /var/ossec/etc/shared/default/agent.conf &&
+              chmod 770 /var/ossec/queue/db /var/ossec/queue/alerts /var/ossec/queue/fts &&
+              chmod 660 /var/ossec/queue/fts/fts-queue /var/ossec/queue/fts/hostinfo &&
+              if [ -f /var/ossec/etc/ossec.conf ]; then chmod 644 /var/ossec/etc/ossec.conf; fi &&
+              if [ -f /var/ossec/etc/client.keys ]; then chown 0:999 /var/ossec/etc/client.keys; chmod 640 /var/ossec/etc/client.keys; fi
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          volumeMounts:
+            - name: wazuh-manager-master
+              mountPath: /var/ossec/logs
+              subPath: wazuh/var/ossec/logs
+            - name: wazuh-manager-master
+              mountPath: /var/ossec/etc
+              subPath: wazuh/var/ossec/etc
+            - name: wazuh-manager-master
+              mountPath: /var/ossec/queue
+              subPath: wazuh/var/ossec/queue
+      containers:
+        - name: wazuh-manager
+          # On AWS/EKS the master API Service is named "wazuh" (the GKE-oriented
+          # image default of "wazuh-master-lb" does not resolve here). Inject the
+          # correct in-cluster endpoint so cloudanix-config.json gets a real
+          # WAZUH_SERVER_IP. start-master.sh honors this override.
+          env:
+            - name: WAZUH_SERVER_IP
+              value: wazuh.wazuh.svc.cluster.local
+          resources:
+            requests:
+              cpu: 1
+              memory: 2Gi
+            limits:
+              cpu: 2
+              memory: 4Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: wazuh-manager-master
+        namespace: wazuh
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: wazuh-storage
+        resources:
+          requests:
+            storage: 50Gi

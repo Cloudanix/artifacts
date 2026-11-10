@@ -1,0 +1,8 @@
+infra/parameters.json
+wazuh/envs/aws-customer-forward/forward.params
+wazuh/envs/aws-customer-forward/generated/
+
+wazuh/base/certs/indexer_cluster/*
+!wazuh/base/certs/indexer_cluster/generate_certs.sh
+wazuh/base/certs/dashboard_http/*
+!wazuh/base/certs/dashboard_http/generate_certs.sh

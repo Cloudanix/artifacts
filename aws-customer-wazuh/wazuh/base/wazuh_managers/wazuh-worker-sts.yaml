@@ -1,0 +1,199 @@
+# Copyright (C) 2019, Wazuh Inc.
+#
+# This program is a free software; you can redistribute it
+# and/or modify it under the terms of the GNU General Public
+# License (version 2) as published by the FSF - Free Software
+# Foundation.
+
+# Wazuh workers StatefulSet
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wazuh-manager-worker
+  namespace: wazuh
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: wazuh-manager
+      node-type: worker
+  serviceName: wazuh-cluster
+  podManagementPolicy: Parallel
+  template:
+    metadata:
+      labels:
+        app: wazuh-manager
+        node-type: worker
+      name: wazuh-manager-worker
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: wazuh-manager
+                    node-type: worker
+      volumes:
+        - name: config
+          configMap:
+            name: wazuh-conf
+        - name: filebeat-certs
+          secret:
+            secretName: indexer-certs
+        - name: wazuh-integration-scripts
+          configMap:
+            name: wazuh-integration-scripts
+            # 0o555 (r-xr-xr-x): world-readable so the wazuh user (gid 999) can
+            # read/exec these ConfigMap scripts. With fsGroup 101 the files are
+            # group 101; 0o511 left "other" as --x (no read) and cron (running as
+            # wazuh) failed with "Permission denied" opening the .py files.
+            defaultMode: 0o555
+        - name: wazuh-integration-shell-scripts
+          configMap:
+            name: wazuh-integration-shell-scripts
+            defaultMode: 0o555
+        - name: wazuh-integration-cron-jobs
+          configMap:
+            name: wazuh-integration-cron-jobs
+            defaultMode: 0o555
+      securityContext:
+        fsGroup: 101
+      containers:
+        - name: wazuh-manager
+          # Cloudanix-published image on PUBLIC ECR (account 774118602354).
+          # Public ECR is pullable cross-account without auth, so customer EKS
+          # nodes can pull it directly (or via a pull-through cache -- see README
+          # "ECR Pull-Through Cache"). Override centrally with the kustomize
+          # `images:` block in envs/aws-customer/kustomization.yml.
+          image: "public.ecr.aws/cloudanix/wazuh-worker-custom:v0.2.0"
+          resources:
+            limits:
+              cpu: 400m
+              memory: 512Mi
+          securityContext:
+            capabilities:
+              add: ["SYS_CHROOT"]
+          volumeMounts:
+            - name: config
+              mountPath: /wazuh-config-mount/etc/ossec.conf
+              subPath: worker.conf
+              readOnly: true
+            - name: filebeat-certs
+              mountPath: /etc/ssl/root-ca.pem
+              readOnly: true
+              subPath: root-ca.pem
+            - name: filebeat-certs
+              mountPath: /etc/ssl/filebeat.pem
+              subPath: filebeat.pem
+              readOnly: true
+            - name: filebeat-certs
+              mountPath: /etc/ssl/filebeat.key
+              subPath: filebeat-key.pem
+              readOnly: true
+            - name: wazuh-manager-worker
+              mountPath: /var/ossec/api/configuration
+              subPath: wazuh/var/ossec/api/configuration
+            - name: wazuh-manager-worker
+              mountPath: /var/ossec/etc
+              subPath: wazuh/var/ossec/etc
+            - name: wazuh-manager-worker
+              mountPath: /var/ossec/logs
+              subPath: wazuh/var/ossec/logs
+            - name: wazuh-manager-worker
+              mountPath: /var/ossec/queue
+              subPath: wazuh/var/ossec/queue
+            - name: wazuh-manager-worker
+              mountPath: /var/ossec/var/multigroups
+              subPath: wazuh/var/ossec/var/multigroups
+            - name: wazuh-manager-worker
+              mountPath: /var/ossec/integrations
+              subPath: wazuh/var/ossec/integrations
+            - name: wazuh-manager-worker
+              mountPath: /var/ossec/active-response/bin
+              subPath: wazuh/var/ossec/active-response/bin
+            - name: wazuh-manager-worker
+              mountPath: /var/ossec/agentless
+              subPath: wazuh/var/ossec/agentless
+            - name: wazuh-manager-worker
+              mountPath: /var/ossec/wodles
+              subPath: wazuh/var/ossec/wodles
+            - name: wazuh-manager-worker
+              mountPath: /etc/filebeat
+              subPath: filebeat/etc/filebeat
+            - name: wazuh-manager-worker
+              mountPath: /var/lib/filebeat
+              subPath: filebeat/var/lib/filebeat
+            # Custom integration script mounts
+            - name: wazuh-integration-scripts
+              mountPath: /var/ossec/integrations/cloudanix-init.py
+              subPath: cloudanix-init.py
+            - name: wazuh-integration-scripts
+              mountPath: /var/ossec/integrations/custom-cloudanix.py
+              subPath: custom-cloudanix.py
+            - name: wazuh-integration-scripts
+              mountPath: /var/ossec/integrations/fetch-inventory-cloudanix.py
+              subPath: fetch-inventory-cloudanix.py
+            - name: wazuh-integration-scripts
+              mountPath: /var/ossec/integrations/cloudanix-push-alerts.py
+              subPath: cloudanix-push-alerts.py
+            - name: wazuh-integration-scripts
+              mountPath: /var/ossec/integrations/cloudanix-push-vuln-alerts.py
+              subPath: cloudanix-push-vuln-alerts.py
+            - name: wazuh-integration-scripts
+              mountPath: /var/ossec/integrations/reset-agents-table.py
+              subPath: reset-agents-table.py
+            - name: wazuh-integration-scripts
+              mountPath: /var/ossec/integrations/cloudanix-agent-sync.py
+              subPath: cloudanix-agent-sync.py
+            - name: wazuh-integration-shell-scripts
+              mountPath: /var/ossec/integrations/custom-cloudanix
+              subPath: custom-cloudanix
+            - name: wazuh-integration-cron-jobs
+              mountPath: /tmp/worker-crontab
+              subPath: worker-crontab
+          ports:
+            - containerPort: 1514
+              name: agents-events
+            - containerPort: 1516
+              name: cluster
+          env:
+            - name: INDEXER_URL
+              value: "https://indexer:9200"
+            - name: INDEXER_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: indexer-cred
+                  key: username
+            - name: INDEXER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: indexer-cred
+                  key: password
+            - name: FILEBEAT_SSL_VERIFICATION_MODE
+              value: "full"
+            - name: SSL_CERTIFICATE_AUTHORITIES
+              value: /etc/ssl/root-ca.pem
+            - name: SSL_CERTIFICATE
+              value: /etc/ssl/filebeat.pem
+            - name: SSL_KEY
+              value: /etc/ssl/filebeat.key
+            - name: WAZUH_CLUSTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: wazuh-cluster-key
+                  key: key
+  volumeClaimTemplates:
+    - metadata:
+        name: wazuh-manager-worker
+        namespace: wazuh
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: wazuh-storage
+        resources:
+          requests:
+            storage: 500Mi

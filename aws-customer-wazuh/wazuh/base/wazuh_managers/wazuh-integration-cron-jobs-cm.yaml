@@ -1,0 +1,36 @@
+# ConfigMap for CronJobs
+#
+# IMPORTANT (AWS/IRSA): cron runs each job with a stripped, non-login environment,
+# so it does NOT inherit the container's IRSA variables (AWS_ROLE_ARN,
+# AWS_WEB_IDENTITY_TOKEN_FILE, AWS_REGION/AWS_DEFAULT_REGION). Without them boto3
+# fails with "Unable to locate credentials" and every cloudanix sync/push job
+# dies -- even though the same script works when run interactively as root.
+#
+# Fix (in start-master.sh / start-worker.sh):
+#   1. Snapshot AWS_* to /var/ossec/etc/cloudanix-aws-exports.sh at boot.
+#   2. Copy the web-identity token to a wazuh-owned path (projected token is
+#      often root-only; refresh every minute via /etc/cron.d).
+#   3. Each cron line runs via cloudanix-cron-run.sh which sources the exports
+#      before exec'ing the python script as user wazuh.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wazuh-integration-cron-jobs
+  namespace: wazuh
+data:
+  master-crontab: |
+    # Wazuh Master Cron Jobs
+    SHELL=/bin/bash
+    BASH_ENV=/var/ossec/etc/cloudanix-aws-exports.sh
+    */1 * * * * /var/ossec/etc/cloudanix-cron-run.sh /var/ossec/integrations/cloudanix-push-alerts.py
+    */5 * * * * /var/ossec/etc/cloudanix-cron-run.sh /var/ossec/integrations/cloudanix-push-vuln-alerts.py
+    0 */2 * * * /var/ossec/etc/cloudanix-cron-run.sh /var/ossec/integrations/fetch-inventory-cloudanix.py
+    0 0 */7 * * /var/ossec/etc/cloudanix-cron-run.sh /var/ossec/integrations/reset-agents-table.py
+    */5 * * * * /var/ossec/etc/cloudanix-cron-run.sh /var/ossec/integrations/cloudanix-agent-sync.py
+
+  worker-crontab: |
+    # Wazuh Worker Cron Jobs
+    SHELL=/bin/bash
+    BASH_ENV=/var/ossec/etc/cloudanix-aws-exports.sh
+    */1 * * * * /var/ossec/etc/cloudanix-cron-run.sh /var/ossec/integrations/cloudanix-push-alerts.py
+    0 */12 * * * : > /var/ossec/logs/archives/archives.json
