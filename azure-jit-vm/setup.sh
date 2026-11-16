@@ -105,6 +105,7 @@ run_bulk_onboard() {
         prefix="$(prompt_with_default "Hub name prefix" "cdxjit")"
         hub_args=(--hub-subscription "$sub" --name-prefix "$prefix")
     fi
+    [[ -f "$SCRIPT_DIR/bulk-onboard.sh" ]] || { error "bulk-onboard.sh is missing. Re-run the installer."; return 1; }
     csv_path="$(prompt_with_default "Path to the CSV of VMs to onboard" "./vms.csv")"
     csv_path="${csv_path/#\~/$HOME}"
     [[ -f "$csv_path" ]] || { error "CSV not found: $csv_path"; return 1; }

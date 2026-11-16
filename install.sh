@@ -205,6 +205,14 @@ else
     rm -f "${TARGET_DIR}/refresh-forwarders.sh" 2>/dev/null || true
 fi
 
+# Bulk onboard (setup.sh option 5). Optional so products without it still install.
+if cdx_curl "${REPO_BASE}/${SELECTED}/bulk-onboard.sh" -o "${TARGET_DIR}/bulk-onboard.sh" 2>/dev/null; then
+    chmod +x "${TARGET_DIR}/bulk-onboard.sh"
+    echo -e "  ${G}✓${R} ${SELECTED}/bulk-onboard.sh"
+else
+    rm -f "${TARGET_DIR}/bulk-onboard.sh" 2>/dev/null || true
+fi
+
 # Download step scripts by listing from a manifest
 # We fetch the steps manifest (one filename per line)
 STEPS_MANIFEST=$(cdx_curl "${REPO_BASE}/${SELECTED}/steps/MANIFEST" 2>/dev/null || echo "")
