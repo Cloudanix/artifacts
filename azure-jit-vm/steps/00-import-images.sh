@@ -32,21 +32,9 @@ image_platform_present() {
     done <<< "$digests"
 }
 
+# Customers cannot query this registry with az. Anonymous pull is checked by the container start.
 if [[ "$CUSTOMER_ACR" == "cdxjitcentral" ]]; then
-    missing=0
-    for repo in "$SSHPIPER_IMAGE" "$VMPROXY_IMAGE" "$LOGGING_IMAGE"; do
-        if image_platform_present "$CUSTOMER_ACR" "$repo" "$IMAGE_TAG"; then
-            ok "Pullable: ${repo}:${IMAGE_TAG}"
-        else
-            error "Incomplete image in cdxjitcentral: ${repo}:${IMAGE_TAG}"
-            error "The tag exists, but its platform manifest is missing. Re-import that image into the central registry."
-            missing=1
-        fi
-    done
-    if [[ "$missing" -ne 0 ]]; then
-        exit 1
-    fi
-    ok "Images stay in cdxjitcentral. Nothing to copy."
+    ok "Images stay in cdxjitcentral. Containers pull anonymously."
     exit 0
 fi
 

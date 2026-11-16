@@ -5,7 +5,7 @@
 # One user-assigned identity runs all three containers. It gets only:
 #   - Key Vault Secrets User on both vaults (read runtime config and SSH keys)
 #   - Storage Blob Data Contributor on the storage account (upload recordings)
-#   - AcrPull on the image registry
+#   - AcrPull on the image registry (skipped for cdxjitcentral, which allows anonymous pull)
 # Idempotent.
 # =============================================================================
 source "$(dirname "${BASH_SOURCE[0]}")/_helpers.sh"
@@ -30,6 +30,9 @@ for vault in "$KV_ENV" "$KV_KEYS"; do
     ensure_role "$PRINCIPAL_ID" ServicePrincipal "Key Vault Secrets User" "$VAULT_ID"
 done
 ensure_role "$PRINCIPAL_ID" ServicePrincipal "Storage Blob Data Contributor" "$STORAGE_ID"
-ensure_role "$PRINCIPAL_ID" ServicePrincipal "AcrPull" "$ACR_ID"
+# Central registry (cdxjitcentral) allows anonymous pull, so AcrPull is skipped when no resource ID is set.
+if [[ -n "$ACR_ID" ]]; then
+    ensure_role "$PRINCIPAL_ID" ServicePrincipal "AcrPull" "$ACR_ID"
+fi
 apply_asset_tags "$(az identity show --resource-group "$RG" --name "$IDENTITY" --query id -o tsv)"
 ok "Asset tags applied"

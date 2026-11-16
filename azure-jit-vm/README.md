@@ -14,9 +14,9 @@ cdx vm connect → az ssh (Entra login) → jump VM → private proxy containers
 | NSG on the jump subnet | SSH (22) from `SSH_ALLOWED_CIDRS` only |
 | Jump VM (Ubuntu 22.04, Standard_B2s) + public IP | Entra SSH entry point; the only public endpoint |
 | 3 private container groups (ACI) | sshpiper (2222), VM proxy (8079), logging |
-| Storage account | sshpiper working dir, shared recordings, log blob container |
-| Key Vault `*-jitenv-kv` | Runtime config for the containers |
-| Key Vault `*-jitkeys-kv` | Target VM SSH private keys |
+| Storage account (name asked, globally unique) | sshpiper working dir, shared recordings, log blob container |
+| Key Vault for runtime config (name asked, default `*-jitenv-kv`) | Runtime config for the containers |
+| Key Vault for SSH keys (name asked, default `*-jitkeys-kv`) | Target VM SSH private keys |
 | User-assigned identity | Runs the containers; read KV, write blobs, pull image |
 
 Ports 2222 and 8079 are never opened on the NSG. The jump VM forwards them to
@@ -27,8 +27,10 @@ loopback only.
 - Azure CLI (`az`) and `jq`, signed in as a **user** (`az login`), with rights
   to create resources and role assignments in the subscription (Owner, or
   Contributor plus User Access Administrator).
-- Registry login server defaults to `cdxjitcentral.azurecr.io`. The resource ID
-  is looked up from that name. Setup asks for the image tag and imports
+- Registry login server defaults to `cdxjitcentral.azurecr.io`. For that registry
+  setup does not ask for a resource ID; the containers pull anonymously. For any
+  other registry, setup asks for its full resource ID and grants AcrPull. Setup
+  asks for the image tag and imports
   `cloudanix/ecr-aws-jit-vm-sshpiper`, `cloudanix/ecr-aws-jit-vm-proxyserver`,
   and `cloudanix/ecr-aws-jit-vm-logging` at that tag. `latest` is rejected.
   When the registry is already `cdxjitcentral`, the images are not copied.
@@ -60,7 +62,7 @@ contains subscription and resource names only, no secrets.
 - **Add a target VM**: finish the target setup in the Cloudanix console, then
   store its SSH private key in the keys vault. For a fleet that shares one
   root key and one non-root key, run `./setup.sh` after the hub is complete
-  and choose bulk onboard, or run `./bulk-onboard.sh --csv ./vms.csv`.
+  and choose option 5 (bulk onboard).
   Secrets are `<vmId>-<user>` and `<vm-name>-<user>`.
 - **Send hub details to Cloudanix**: `./setup.sh --share` prints the
   subscription, resource group, role IDs, and log container. No secrets.

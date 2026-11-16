@@ -10,6 +10,10 @@
 _HELPERS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$_HELPERS_DIR/../../lib/common.sh"
 
+# az failures must stop the step. setup.sh marks a step complete when this
+# script exits 0, and these scripts previously kept going after a failed create.
+set -eo pipefail
+
 # -----------------------------------------------------------------------------
 # Derived resource names
 # -----------------------------------------------------------------------------
@@ -25,9 +29,13 @@ VM_SUBNET="${NAME_PREFIX}-vm-subnet"
 JUMP_NSG="${NAME_PREFIX}-jump-nsg"
 JUMP_VM="${NAME_PREFIX}-jit-jump"
 JUMP_PIP="${NAME_PREFIX}-jit-jump-pip"
-STORAGE="${NAME_PREFIX}jitvmstore"
-KV_ENV="${NAME_PREFIX}-jitenv-kv"
-KV_KEYS="${NAME_PREFIX}-jitkeys-kv"
+# Storage and Key Vault names are global across Azure, so the wizard asks for
+# them and saves them in .state.json (STORAGE_ACCOUNT_NAME, KEY_VAULT_ENV_NAME,
+# KEY_VAULT_KEYS_NAME). A hub built before that existed has none saved and keeps
+# the prefix-based names it was created with.
+STORAGE="${STORAGE_ACCOUNT_NAME:-${NAME_PREFIX}jitvmstore}"
+KV_ENV="${KEY_VAULT_ENV_NAME:-${NAME_PREFIX}-jitenv-kv}"
+KV_KEYS="${KEY_VAULT_KEYS_NAME:-${NAME_PREFIX}-jitkeys-kv}"
 IDENTITY="${NAME_PREFIX}-jit-identity"
 ACI_SSHPIPER="${NAME_PREFIX}-jit-sshpiper"
 ACI_VMPROXY="${NAME_PREFIX}-jit-vmproxy"
@@ -96,8 +104,13 @@ ssh_cidrs() {
 validate_inputs() {
     require_env SUBSCRIPTION_ID LOCATION NAME_PREFIX SSH_ALLOWED_CIDRS \
         OPERATOR_OBJECT_ID JUMP_VM_ADMIN_USERNAME JUMP_VM_SSH_PUBLIC_KEY_FILE \
-        IMAGE_REGISTRY ACR_RESOURCE_ID IMAGE_TAG SSHPIPER_IMAGE VMPROXY_IMAGE \
+        IMAGE_REGISTRY IMAGE_TAG SSHPIPER_IMAGE VMPROXY_IMAGE \
         LOGGING_IMAGE CDX_API_BASE CDX_DC LOG_CONTAINER || return 1
+
+    # The resource ID is only needed to grant AcrPull. cdxjitcentral allows anonymous pull.
+    if [[ "$IMAGE_REGISTRY" != "cdxjitcentral.azurecr.io" ]]; then
+        require_env ACR_RESOURCE_ID || return 1
+    fi
 
     if [[ ! "$NAME_PREFIX" =~ ^[a-z][a-z0-9]{2,11}$ ]]; then
         error "NAME_PREFIX must be 3-12 characters: lowercase letters/digits, starting with a letter"

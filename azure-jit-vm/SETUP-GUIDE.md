@@ -16,7 +16,7 @@ The jump VM forwards ports 2222 and 8079 on loopback only. Those ports are not o
 | Run the proxy in a VNet you already have | **Existing VNet** |
 | Add a VM in a VNet already peered to the hub | **Onboard (already-peered VNet)** |
 | Add a VM in a new or unpeered VNet | **Onboard (new VNet)** |
-| Many VMs, one shared root key and one shared non-root key | **Bulk onboard** (finished hub menu, or `./bulk-onboard.sh`) |
+| Many VMs, one shared root key and one shared non-root key | **Bulk onboard** (option 5 in `./setup.sh`) |
 
 New VNet asks for a hub CIDR. The default is `10.30.0.0/16`: jump `.1.0/24`, proxy `.2.0/24`, spare `.3.0/24`. It must be a `/16` and it must not overlap the target VNet.
 
@@ -45,10 +45,11 @@ When every hub step is complete, `./setup.sh` shows **Bulk onboard VMs from a CS
 
 - Hub subscription ID and region
 - Name prefix, 3–12 characters, a lowercase letter then letters or digits (default `cdxjit`). Use the same prefix when you add another VM to this hub
+- Storage account name and two Key Vault names (runtime config, SSH keys). Azure needs each one unique across all of Azure, so setup checks the name you type and asks again when it is taken. The suggestion starts with your prefix (`{prefix}jitvmstore`, `{prefix}-jitenv-kv`, `{prefix}-jitkeys-kv`) and gains a short suffix when that name is already taken. The names are saved in `.state.json`
 - A VPN CIDR for SSH to the jump VM, if you have one. Otherwise the jump VM allows SSH from `0.0.0.0/0`
 - The signed-in Entra user is the default operator
 - A jump VM SSH key created at `~/.ssh/cdx-azure-jit-jump`
-- Registry login server (default `cdxjitcentral.azurecr.io`). The resource ID is looked up from that name. Setup asks for the image tag with the other answers, then imports the three proxy images at that tag. The containers run the same tag. `latest` is rejected. When the registry is already `cdxjitcentral`, the images are not copied.
+- Registry login server (default `cdxjitcentral.azurecr.io`). For that registry setup does not ask for a resource ID; the containers pull anonymously. For any other registry, setup asks for its full resource ID and grants AcrPull. Setup asks for the image tag with the other answers, then imports the three proxy images at that tag. The containers run the same tag. `latest` is rejected. When the registry is already `cdxjitcentral`, the images are not copied.
 - Cloudanix API base URL (`CDX_API_BASE`, default `https://api.cloudanix.com`), data center (`CDX_DC`: `US`, `IN`, or `MC1`), and Sentry DSN (`CDX_SENTRY_DSN`, default `none`)
 - `CDX_AUTH_TOKEN` and `CDX_SIGNATURE_SECRET_KEY`, typed with the other answers. They are not saved to `.state.json`
 
@@ -66,7 +67,7 @@ When every hub step is complete, `./setup.sh` shows **Bulk onboard VMs from a CS
 
 ## Storing the SSH key
 
-The last step of every scope stores the target private key in the keys vault `{prefix}-jitkeys-kv`.
+The last step of every scope stores the target private key in the keys vault (`{prefix}-jitkeys-kv` unless you chose another name).
 
 1. Enter the VM name. The script uses that name, not the full resource ID.
 2. Enter the OS user.
@@ -124,42 +125,38 @@ sudo -l -U jituser        # no sudo rights, or only the commands you listed
 
 Run an onboard scope. The OS user is `jituser` and the private key path is `./jituser`. Setup stores that key as `<vmId>-jituser` and `<vm-name>-jituser`. After both secrets are in the keys vault, delete `./jituser` from your machine. The VM keeps the public key only.
 
-## What each scope creates
+## What each scope runs
 
-**New VNet** creates the JIT VM roles, imports the images, then runs steps 01 through 10.
+**New VNet.** Roles, image import, resource group, VNet, subnets, network security group, public IP, Ubuntu 22.04 jump VM (`Standard_B2s`), Entra SSH login, storage, both Key Vaults, managed identity, runtime configuration, three private container groups (sshpiper on 2222, VM proxy on 8079, logging on 8079), loopback forwarders, both sides of the VNet peering, TCP 22 from the proxy subnet, and one key per OS user you named.
 
-1. Resource group, VNet, jump / proxy / spare subnets, network security group, public IP, Ubuntu 22.04 jump VM (`Standard_B2s`), Entra SSH login.
-2. Storage account, working-dir share, recordings share, log container, environment vault, keys vault.
-3. Managed identity: read both vaults, write blobs, pull from your registry.
-4. Runtime configuration in the environment vault, including the two Cloudanix credentials.
-5. Three private container groups: sshpiper on 2222, VM proxy on 8079, logging on 8079.
-6. Loopback forwarders on the jump VM.
-7. Peering from the hub VNet to the target VNet.
-8. Peering from the target VNet back to the hub. It must reach `Connected`.
-9. TCP 22 from the proxy subnet on the target network security group.
-10. The target SSH key.
+**Existing VNet.** The same hub pieces inside the VNet you name, then the SSH allow and the key. No new VNet and no peering.
 
-**Existing VNet** runs the same hub steps inside the VNet you name, then steps 9 and 10. It does not create a VNet and it does not create a peering.
+**Onboard (already-peered).** SSH allow and the key only. One OS user per run.
 
-**Onboard (already-peered)** runs steps 9 and 10 only.
+**Onboard (new VNet).** Peering both ways, then SSH allow and the key. Peering must reach `Connected`. One OS user per run.
 
-**Onboard (new VNet)** runs steps 7 through 10.
-
-**Bulk onboard** does not run those steps. For each CSV row it reuses a peering to that VNet when one exists, allows TCP 22 from the proxy subnet, and stores the root key and the non-root key. See [Bulk onboard a fleet](#bulk-onboard-a-fleet).
+**Bulk onboard.** No new hub. For each CSV row: reuse a peering to that VNet when one exists, otherwise create both sides; allow TCP 22 from the proxy subnet; store the root key and the non-root key. See [CSV pattern](#csv-pattern).
 
 ## Bulk onboard a fleet
 
-Use this after the hub setup is complete, when one environment has many VMs and every VM uses the same root key and the same non-root key.
+Use this when one environment has many VMs and every VM uses the same root key and the same non-root key. It runs from the wizard, as **option 5**. It does not create a hub, so the hub must already exist.
 
 ```bash
-cd azure-jit-vm
-./bulk-onboard.sh --csv ./vms.csv --dry-run
-./bulk-onboard.sh --csv ./vms.csv
+cd ~/.cdx-jit/azure-jit-vm && ./setup.sh
 ```
 
-`--root-key` and `--nonroot-key` fill in any row that leaves the path columns empty. `--root-user` defaults to `root`. `--nonroot-user` defaults to `ubuntu`.
+Choose `5` (**Bulk onboard VMs from a CSV**). The wizard then asks, in order:
 
-Header names are case-insensitive. Required columns are `subscription_id`, `vm_resource_group`, and `vm_name`. Leave the VNet columns empty to take the VNet from the VM's NIC.
+1. Hub subscription ID and name prefix. Asked only on a machine with no saved hub. Use the same values as the hub install.
+2. Path to the CSV. Default `./vms.csv`.
+3. Dry run first (default `y`). It checks every row and changes nothing.
+4. Run for real (default `n`). Answer `y` only after the dry run is clean.
+
+Each row must fill in `root_key_path` and `nonroot_key_path` with a key file that exists. A row with an empty key path stops the dry run. Rerunning is safe: finished VMs are skipped.
+
+### CSV pattern
+
+Header names are case-insensitive. Order is free. Values cannot contain commas or quotes. Required columns are `subscription_id`, `vm_resource_group`, and `vm_name`. Leave `vnet_name` and `vnet_resource_group` empty to take the VNet from the VM's NIC. A missing key file stops the run before any Azure change.
 
 ```csv
 subscription_id,vm_resource_group,vm_name,region,root_user,nonroot_user,root_key_path,nonroot_key_path,vnet_name,vnet_resource_group

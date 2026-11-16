@@ -22,4 +22,4 @@ while IFS='=' read -r key value; do
     export "$key=$value"
 done < <(jq -r '.config | to_entries[] | "\(.key)=\(.value)"' "$STATE_FILE")
 
-exec bash "$SCRIPT_DIR/steps/06-jump-forwarders.sh"
+exec "$BASH" "$SCRIPT_DIR/steps/06-jump-forwarders.sh"

@@ -14,6 +14,31 @@
 #   - Sensitive value masking (mask_sensitive)
 # =============================================================================
 
+# macOS /bin/bash is 3.2 and rejects `declare -A`. Re-run this script with
+# Homebrew Bash when it is installed. Otherwise stop with the install command.
+if (( BASH_VERSINFO[0] < 4 )); then
+    _cdx_bash=""
+    for _cdx_candidate in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+        if [[ -x "$_cdx_candidate" ]]; then
+            _cdx_major="$("$_cdx_candidate" -c 'printf %s "${BASH_VERSINFO[0]}"')"
+            if [[ "$_cdx_major" -ge 4 ]]; then
+                _cdx_bash="$_cdx_candidate"
+                break
+            fi
+        fi
+    done
+    unset _cdx_candidate _cdx_major
+    if [[ -n "$_cdx_bash" && -f "$0" ]]; then
+        exec "$_cdx_bash" "$0" "$@"
+    fi
+    echo "[ERROR] This setup needs Bash 4 or newer. This shell is Bash ${BASH_VERSION}." >&2
+    echo "        macOS includes Bash 3.2, which cannot run these scripts." >&2
+    echo "        Install a current Bash, then run setup with that Bash:" >&2
+    echo "          brew install bash" >&2
+    echo "          /opt/homebrew/bin/bash ./setup.sh" >&2
+    exit 1
+fi
+
 # Prevent double-sourcing
 if [[ "${_CDX_COMMON_LOADED:-}" == "true" ]]; then
     return 0
@@ -806,6 +831,19 @@ validate_image_tag() {
     [[ "$value" =~ ^[A-Za-z0-9._-]+$ && "$value" != "latest" ]]
 }
 
+# Azure storage account name: 3-24 lowercase letters and digits.
+validate_storage_account_name() {
+    local value="$1"
+    [[ "$value" =~ ^[a-z0-9]{3,24}$ ]]
+}
+
+# Azure Key Vault name: 3-24 characters, letters/digits/hyphens, starts with a
+# letter, ends with a letter or digit, no double hyphen.
+validate_keyvault_name() {
+    local value="$1"
+    [[ "$value" =~ ^[A-Za-z][A-Za-z0-9-]{1,22}[A-Za-z0-9]$ && "$value" != *--* ]]
+}
+
 # Accepts any value, including empty — for genuinely optional fields.
 validate_optional() {
     return 0
@@ -828,6 +866,8 @@ validate() {
         boolean)                validate_boolean "$value" ;;
         nonempty)               validate_nonempty "$value" ;;
         image_tag)              validate_image_tag "$value" ;;
+        storage_account_name)   validate_storage_account_name "$value" ;;
+        keyvault_name)          validate_keyvault_name "$value" ;;
         optional)               validate_optional "$value" ;;
         *)                      validate_nonempty "$value" ;;  # fallback
     esac
@@ -1140,6 +1180,7 @@ export -f prompt_aws_credentials switch_aws_account
 export -f validate_aws_account_id validate_azure_subscription_id validate_cidr
 export -f validate_arn validate_region validate_alphanumeric_dash
 export -f validate_semver_or_latest validate_boolean validate_nonempty validate
+export -f validate_storage_account_name validate_keyvault_name
 export -f handle_error show_progress mask_sensitive parse_step_output
 export -f show_account_switch_banner check_prerequisites require_env
 export -f cdx_public_repo cdx_private_repo cdx_image_uri

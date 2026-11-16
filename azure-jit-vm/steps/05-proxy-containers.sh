@@ -25,6 +25,12 @@ else
 fi
 IDENTITY_ID="$(az identity show --resource-group "$RG" --name "$IDENTITY" --query id -o tsv)"
 IDENTITY_CLIENT_ID="$(az identity show --resource-group "$RG" --name "$IDENTITY" --query clientId -o tsv)"
+# Pull with the proxy identity only when step 03 granted it AcrPull. Otherwise pull anonymously.
+if [[ -n "${ACR_RESOURCE_ID:-}" ]]; then
+    REGISTRY_CREDS="$(jq -nc --arg server "$IMAGE_REGISTRY" --arg identity "$IDENTITY_ID" '[{server: $server, identity: $identity}]')"
+else
+    REGISTRY_CREDS='[]'
+fi
 KV_ENV_URL="https://${KV_ENV}.vault.azure.net/"
 STORAGE_KEY="$(az storage account keys list --resource-group "$RG" --account-name "$STORAGE" \
     --query '[0].value' -o tsv)"
@@ -41,7 +47,7 @@ build_manifest() {
         --arg client_id "$IDENTITY_CLIENT_ID" \
         --arg kv_env_url "$KV_ENV_URL" \
         --arg kv_keys "$KV_KEYS" \
-        --arg registry "$IMAGE_REGISTRY" \
+        --argjson registry_creds "$REGISTRY_CREDS" \
         --arg subnet "$ACI_SUBNET_ID" \
         --arg account "$STORAGE" \
         --arg account_key "$STORAGE_KEY" \
@@ -77,7 +83,7 @@ build_manifest() {
                   + (if $with_workdir then [{name: "workingdir", mountPath: "/tmp/sshpiper/workingdir"}] else [] end))
               }
             }],
-            imageRegistryCredentials: [{server: $registry, identity: $identity}],
+            imageRegistryCredentials: $registry_creds,
             ipAddress: {type: "Private", ports: [{protocol: "TCP", port: $port}]},
             osType: "Linux",
             restartPolicy: "Always",

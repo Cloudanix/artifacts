@@ -110,14 +110,14 @@ run_bulk_onboard() {
     [[ -f "$csv_path" ]] || { error "CSV not found: $csv_path"; return 1; }
 
     if prompt_yes_no "Dry run first? It checks every row and changes nothing" "y"; then
-        bash "$SCRIPT_DIR/bulk-onboard.sh" --csv "$csv_path" "${hub_args[@]}" --dry-run || return 1
+        "$BASH" "$SCRIPT_DIR/bulk-onboard.sh" --csv "$csv_path" "${hub_args[@]}" --dry-run || return 1
         echo ""
         if ! prompt_yes_no "Run for real now?" "n"; then
             info "Stopped. Nothing was changed in Azure."
             return 0
         fi
     fi
-    bash "$SCRIPT_DIR/bulk-onboard.sh" --csv "$csv_path" "${hub_args[@]}"
+    "$BASH" "$SCRIPT_DIR/bulk-onboard.sh" --csv "$csv_path" "${hub_args[@]}"
 }
 
 # finished_hub_menu
@@ -146,6 +146,92 @@ finished_hub_menu() {
             exit 0
             ;;
     esac
+}
+
+# azure_name_status KIND NAME SUBSCRIPTION RESOURCE_GROUP
+#   KIND is storage or vault. Prints one of:
+#     ours    this hub's resource group already has it (a resumed run)
+#     free    no Azure resource anywhere uses the name
+#     taken   another resource owns the name. Storage account and Key Vault
+#             names are global across Azure, and a soft-deleted vault still
+#             holds its name.
+#     unknown the check itself failed
+azure_name_status() {
+    local kind="$1" name="$2" sub="$3" rg="$4" available=""
+    if [[ "$kind" == storage ]]; then
+        if az storage account show --subscription "$sub" --resource-group "$rg" \
+            --name "$name" >/dev/null 2>&1; then
+            echo ours
+            return 0
+        fi
+        available="$(az storage account check-name --subscription "$sub" --name "$name" \
+            --query nameAvailable -o tsv 2>/dev/null || true)"
+    else
+        if az keyvault show --subscription "$sub" --resource-group "$rg" \
+            --name "$name" >/dev/null 2>&1; then
+            echo ours
+            return 0
+        fi
+        available="$(az keyvault check-name --subscription "$sub" --name "$name" \
+            --query nameAvailable -o tsv 2>/dev/null || true)"
+    fi
+    case "$available" in
+        true) echo free ;;
+        false) echo taken ;;
+        *) echo unknown ;;
+    esac
+}
+
+# ask_global_name FIELD PROMPT RULE
+#   Asks for the storage account or one of the two Key Vault names, checks the
+#   format, and asks again until the name is free (or already this hub's).
+#   The suggested default is the prefix-based name. When that one is taken, the
+#   suggestion becomes the same name with a short suffix, so Enter still works.
+ask_global_name() {
+    local field="$1" prompt="$2" rule="$3"
+    local prefix sub rg suffix kind default alt value status other
+    prefix="$(get_config_value "$STATE_FILE" "NAME_PREFIX")"
+    sub="$(get_config_value "$STATE_FILE" "SUBSCRIPTION_ID")"
+    rg="${prefix}-jit-vm-rg"
+    suffix="$(printf '%s' "${sub}-${prefix}" | cksum | awk '{printf "%03x", $1 % 4096}')"
+    case "$field" in
+        STORAGE_ACCOUNT_NAME)
+            kind=storage; default="${prefix}jitvmstore"; alt="${prefix}${suffix}vmstore" ;;
+        KEY_VAULT_ENV_NAME)
+            kind=vault; default="${prefix}-jitenv-kv"; alt="${prefix}-${suffix}env-kv" ;;
+        KEY_VAULT_KEYS_NAME)
+            kind=vault; default="${prefix}-jitkeys-kv"; alt="${prefix}-${suffix}keys-kv" ;;
+        *)
+            error "Not a global name field: $field"
+            return 1 ;;
+    esac
+    if [[ "$(azure_name_status "$kind" "$default" "$sub" "$rg")" == taken ]]; then
+        default="$alt"
+    fi
+    while true; do
+        value="$(prompt_with_default "$prompt" "$default")"
+        if ! validate "$value" "$rule"; then
+            warn "Invalid name: $value"
+            continue
+        fi
+        if [[ "$field" == KEY_VAULT_KEYS_NAME ]]; then
+            other="$(get_config_value "$STATE_FILE" "KEY_VAULT_ENV_NAME")"
+            if [[ "$value" == "$other" ]]; then
+                warn "The two Key Vaults need different names."
+                continue
+            fi
+        fi
+        status="$(azure_name_status "$kind" "$value" "$sub" "$rg")"
+        if [[ "$status" == taken ]]; then
+            warn "$value is already used by another Azure resource. Choose another name."
+            continue
+        fi
+        if [[ "$status" == unknown ]]; then
+            warn "Could not check whether $value is free. Setup stops at step 02 if it is taken."
+        fi
+        set_config_value "$STATE_FILE" "$field" "$value"
+        return 0
+    done
 }
 
 # =============================================================================
@@ -337,8 +423,17 @@ if [[ "$RESUME_MODE" == false ]]; then
                 done
                 continue
                 ;;
+            STORAGE_ACCOUNT_NAME|KEY_VAULT_ENV_NAME|KEY_VAULT_KEYS_NAME)
+                ask_global_name "$field_name" "$field_prompt" "$field_rule"
+                continue
+                ;;
             ACR_RESOURCE_ID)
                 registry="$(get_config_value "$STATE_FILE" "IMAGE_REGISTRY")"
+                # cdxjitcentral allows anonymous pull, so no resource ID and no AcrPull grant are needed.
+                if [[ "$registry" == "cdxjitcentral.azurecr.io" ]]; then
+                    set_config_value "$STATE_FILE" "$field_name" ""
+                    continue
+                fi
                 hub_sub="$(get_config_value "$STATE_FILE" "SUBSCRIPTION_ID")"
                 [[ -n "$hub_sub" ]] && az account set --subscription "$hub_sub" >/dev/null
                 acr_id="$(az acr show --name "${registry%%.*}" --query id -o tsv 2>/dev/null || true)"
@@ -434,7 +529,15 @@ if [[ "$RESUME_MODE" == false ]]; then
             JUMP_VM_ADMIN_USERNAME) summary_label="Jump admin user" ;;
             JUMP_VM_SSH_PUBLIC_KEY_FILE) summary_label="Jump SSH public key" ;;
             IMAGE_REGISTRY) summary_label="Registry" ;;
-            ACR_RESOURCE_ID) summary_label="Registry resource ID" ;;
+            ACR_RESOURCE_ID)
+                summary_label="Registry resource ID"
+                if [[ -z "$stored_value" ]]; then
+                    stored_value="not needed (cdxjitcentral pulls anonymously)"
+                fi
+                ;;
+            STORAGE_ACCOUNT_NAME) summary_label="Storage account" ;;
+            KEY_VAULT_ENV_NAME) summary_label="Key Vault (runtime config)" ;;
+            KEY_VAULT_KEYS_NAME) summary_label="Key Vault (SSH keys)" ;;
             IMAGE_TAG) summary_label="Image tag" ;;
             SSHPIPER_IMAGE) summary_label="sshpiper image" ;;
             VMPROXY_IMAGE) summary_label="VM proxy image" ;;
@@ -474,6 +577,24 @@ if [[ "$RESUME_MODE" == false ]]; then
         info "You can re-run the script to change values. State has been saved."
         exit 0
     fi
+fi
+
+# A state saved before the storage and Key Vault names were asked has none of
+# them. Ask now, but only while step 02 has not created anything. Once step 02
+# is complete the hub keeps the names it was built with.
+if [[ "$RESUME_MODE" == true ]] \
+    && [[ "$SELECTED_SCOPE_MODE" == "new-vnet" || "$SELECTED_SCOPE_MODE" == "existing-vnet" ]] \
+    && ! is_step_complete "$STATE_FILE" "02-storage-and-keyvaults"; then
+    for field_def in "${CONFIG_FIELDS[@]}"; do
+        IFS='|' read -r field_name field_rule field_default field_prompt field_scopes field_sensitive <<< "$field_def"
+        case "$field_name" in
+            STORAGE_ACCOUNT_NAME|KEY_VAULT_ENV_NAME|KEY_VAULT_KEYS_NAME)
+                if [[ -z "$(get_config_value "$STATE_FILE" "$field_name")" ]]; then
+                    ask_global_name "$field_name" "$field_prompt" "$field_rule"
+                fi
+                ;;
+        esac
+    done
 fi
 
 # =============================================================================
@@ -582,7 +703,7 @@ for step_id in "${ALL_STEPS[@]}"; do
     step_log="$(mktemp)"
     set +e
     set +o pipefail
-    bash "$step_script" 2>&1 | tee "$step_log" | grep -v --line-buffered '^OUTPUT:'
+    "$BASH" "$step_script" 2>&1 | tee "$step_log" | grep -v --line-buffered '^OUTPUT:'
     step_exit_code=${PIPESTATUS[0]}
     set -o pipefail
     set -e
