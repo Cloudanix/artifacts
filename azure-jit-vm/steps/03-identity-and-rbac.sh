@@ -30,9 +30,12 @@ for vault in "$KV_ENV" "$KV_KEYS"; do
     ensure_role "$PRINCIPAL_ID" ServicePrincipal "Key Vault Secrets User" "$VAULT_ID"
 done
 ensure_role "$PRINCIPAL_ID" ServicePrincipal "Storage Blob Data Contributor" "$STORAGE_ID"
-# Central registry (cdxjitcentral) allows anonymous pull, so AcrPull is skipped when no resource ID is set.
-if [[ -n "$ACR_ID" ]]; then
+# Central registry pulls anonymously. A saved value such as "skip" is not a scope.
+if [[ "$IMAGE_REGISTRY" != "cdxjitcentral.azurecr.io" && "$ACR_ID" == /subscriptions/* ]]; then
     ensure_role "$PRINCIPAL_ID" ServicePrincipal "AcrPull" "$ACR_ID"
+elif [[ -n "$ACR_ID" && "$IMAGE_REGISTRY" != "cdxjitcentral.azurecr.io" ]]; then
+    error "ACR_RESOURCE_ID must be a resource ID starting with /subscriptions/."
+    exit 1
 fi
 apply_asset_tags "$(az identity show --resource-group "$RG" --name "$IDENTITY" --query id -o tsv)"
 ok "Asset tags applied"

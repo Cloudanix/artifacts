@@ -25,8 +25,9 @@ else
 fi
 IDENTITY_ID="$(az identity show --resource-group "$RG" --name "$IDENTITY" --query id -o tsv)"
 IDENTITY_CLIENT_ID="$(az identity show --resource-group "$RG" --name "$IDENTITY" --query clientId -o tsv)"
-# Pull with the proxy identity only when step 03 granted it AcrPull. Otherwise pull anonymously.
-if [[ -n "${ACR_RESOURCE_ID:-}" ]]; then
+# Pull with the proxy identity only when step 03 granted it AcrPull.
+# cdxjitcentral, and any saved non-ID such as "skip", pull anonymously.
+if [[ "$IMAGE_REGISTRY" != "cdxjitcentral.azurecr.io" && "${ACR_RESOURCE_ID:-}" == /subscriptions/* ]]; then
     REGISTRY_CREDS="$(jq -nc --arg server "$IMAGE_REGISTRY" --arg identity "$IDENTITY_ID" '[{server: $server, identity: $identity}]')"
 else
     REGISTRY_CREDS='[]'
@@ -94,13 +95,29 @@ build_manifest() {
         }'
 }
 
+# container_has_registry_creds NAME
+#   True when the existing group was created with image registry credentials.
+container_has_registry_creds() {
+    local name="$1" raw count
+    raw="$(az container show --resource-group "$RG" --name "$name" -o json 2>/dev/null)" || return 1
+    count="$(printf '%s' "$raw" | jq -r '(.imageRegistryCredentials // .properties.imageRegistryCredentials // []) | length')"
+    [[ "$count" -gt 0 ]]
+}
+
 # deploy_container NAME IMAGE PORT WITH_WORKDIR
 deploy_container() {
     local name="$1" image="$2" port="$3" with_workdir="$4" manifest
     if az container show --resource-group "$RG" --name "$name" >/dev/null 2>&1; then
-        apply_asset_tags "$(az container show --resource-group "$RG" --name "$name" --query id -o tsv)"
-        ok "Container group exists, tags refreshed: $name"
-        return 0
+        # A group created while ACR_RESOURCE_ID was "skip" still has registry
+        # credentials and cannot pull cdxjitcentral. Replace that group only.
+        if [[ "$REGISTRY_CREDS" == "[]" ]] && container_has_registry_creds "$name"; then
+            info "Replacing $name so it pulls anonymously."
+            az container delete --resource-group "$RG" --name "$name" --yes --only-show-errors
+        else
+            apply_asset_tags "$(az container show --resource-group "$RG" --name "$name" --query id -o tsv)"
+            ok "Container group exists, tags refreshed: $name"
+            return 0
+        fi
     fi
     # The manifest holds the storage key, so it lives in a 0600 temp file that
     # is removed on both success and failure.

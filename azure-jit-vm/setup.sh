@@ -90,6 +90,28 @@ hub_setup_complete() {
     done
 }
 
+# clear_saved_central_registry_id
+#   cdxjitcentral allows anonymous pull. An older prompt stored whatever was
+#   typed, including "skip". That value is not a resource ID: step 03 would
+#   grant AcrPull on it, and step 05 would pull with registry credentials.
+#   Clear it and rerun the steps that already consumed it.
+clear_saved_central_registry_id() {
+    local saved step_id state
+    [[ "$(get_config_value "$STATE_FILE" "IMAGE_REGISTRY")" == "cdxjitcentral.azurecr.io" ]] || return 0
+    saved="$(get_config_value "$STATE_FILE" "ACR_RESOURCE_ID")"
+    [[ -n "$saved" ]] || return 0
+    info "Clearing the saved registry resource ID. cdxjitcentral pulls anonymously."
+    set_config_value "$STATE_FILE" "ACR_RESOURCE_ID" ""
+    for step_id in 03-identity-and-rbac 05-proxy-containers 06-jump-forwarders; do
+        if is_step_complete "$STATE_FILE" "$step_id"; then
+            state="$(cat "$STATE_FILE")"
+            state="$(printf '%s' "$state" | jq --arg id "$step_id" 'del(.steps[$id])')"
+            save_state "$STATE_FILE" "$state"
+            info "Marked to rerun: $step_id"
+        fi
+    done
+}
+
 # run_bulk_onboard
 #   Asks for a CSV, runs bulk-onboard.sh as a dry run first, and only does the
 #   real run if the user confirms. Never writes .state.json.
@@ -271,6 +293,8 @@ if [[ -f "$STATE_FILE" ]]; then
         echo ""
         info "Found existing setup state (scope: $existing_label)"
         echo ""
+
+        clear_saved_central_registry_id
 
         if hub_setup_complete "$existing_scope"; then
             finished_hub_menu
