@@ -132,21 +132,30 @@ if [[ -f "$STATE_FILE" ]]; then
         done
 
         echo ""
-        info "Found existing setup state (scope: $existing_label)"
+        info "Found existing setup state (scope: ${existing_label:-$existing_scope})"
         echo ""
 
-        if prompt_yes_no "Resume from where you left off?" "y"; then
-            RESUME_MODE=true
-            SELECTED_SCOPE_MODE="$existing_scope"
-        else
-            if prompt_yes_no "Start fresh? (This will delete the existing state)" "n"; then
+        prompt_selection "What do you want to do?" \
+            "Resume from where you left off" \
+            "Update image version on existing ECS services" \
+            "Start fresh (deletes the existing state)" || {
+            error "No option selected."
+            exit 1
+        }
+
+        case "$CDX_SELECTED" in
+            "Resume from where you left off")
+                RESUME_MODE=true
+                SELECTED_SCOPE_MODE="$existing_scope"
+                ;;
+            "Update image version on existing ECS services")
+                SELECTED_SCOPE_MODE="update-images"
+                ;;
+            *)
                 rm -f "$STATE_FILE"
                 info "Previous state cleared."
-            else
-                info "Exiting. State file preserved."
-                exit 0
-            fi
-        fi
+                ;;
+        esac
     else
         warn "State file exists but is corrupted."
         if prompt_yes_no "Start fresh? (This will delete the corrupted state)" "n"; then
@@ -178,6 +187,20 @@ if [[ -z "$SELECTED_SCOPE_MODE" ]]; then
 fi
 
 info "Scope mode: $SELECTED_SCOPE_MODE"
+
+# Image updates run against the credentials already in this shell. They must
+# not rewrite .state.json or walk the install steps.
+if [[ "$SELECTED_SCOPE_MODE" == "update-images" ]]; then
+    info "This updates the image tag on services that are already running. It does not create infrastructure."
+    _update_script="$SCRIPT_DIR/steps/11-update-images.sh"
+    if [[ ! -f "$_update_script" ]]; then
+        error "Update script not found: $_update_script"
+        error "Re-run the installer so this step is downloaded."
+        exit 1
+    fi
+    bash "$_update_script"
+    exit $?
+fi
 
 # =============================================================================
 # DETERMINE STEPS FOR SELECTED MODE

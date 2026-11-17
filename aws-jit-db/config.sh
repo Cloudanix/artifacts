@@ -14,13 +14,14 @@ SETUP_DISPLAY_NAME="AWS JIT Database"
 # SCOPE MODES
 # =============================================================================
 
-SCOPE_MODES=("new-vpc" "existing-vpc" "same-account" "onboard-peered" "onboard-new-account")
+SCOPE_MODES=("new-vpc" "existing-vpc" "same-account" "onboard-peered" "onboard-new-account" "update-images")
 SCOPE_MODE_LABELS=(
     "New VPC (cross-account DB with VPC peering)"
     "Existing VPC (cross-account DB, first setup)"
     "Existing VPC (same-account DB or additional setup)"
     "Onboard new DB in an already-peered VPC (whitelist RDS only, no new infra)"
     "Onboard first DB from a new account (peer + role setup, reuse existing bastion)"
+    "Update image version (choose ECS services and a tag)"
 )
 
 # =============================================================================
@@ -37,6 +38,9 @@ STEPS_FOR_MODE["existing-vpc"]="02-install-workloads-existing-vpc 05-extend-role
 STEPS_FOR_MODE["same-account"]="02-install-workloads-same-account 07-update-assume-role 08-create-permission-set"
 STEPS_FOR_MODE["onboard-peered"]="09-onboard-rds-peered"
 STEPS_FOR_MODE["onboard-new-account"]="10-onboard-peering 04-accept-peering 05-extend-role-permissions 06-extend-role-trust 07-update-assume-role"
+# update-images is handled in setup.sh before the step runner. The entry is
+# here so the mode stays defined with the others.
+STEPS_FOR_MODE["update-images"]="11-update-images"
 
 # Scope modes that install ECS workloads (and therefore need image sourcing set
 # up: either a pull-through cache by default, or a prepended sync step with
@@ -66,6 +70,7 @@ STEP_ACCOUNT["07-update-assume-role"]="jit-workload"
 STEP_ACCOUNT["08-create-permission-set"]="management"
 STEP_ACCOUNT["09-onboard-rds-peered"]="db-account"
 STEP_ACCOUNT["10-onboard-peering"]="jit-workload"
+STEP_ACCOUNT["11-update-images"]="current"
 
 # =============================================================================
 # STEP DISPLAY LABELS
@@ -84,6 +89,7 @@ STEP_LABELS["07-update-assume-role"]="Update ECS Assume Role Policy"
 STEP_LABELS["08-create-permission-set"]="Create SSO Permission Set"
 STEP_LABELS["09-onboard-rds-peered"]="Whitelist New RDS (Already-Peered VPC)"
 STEP_LABELS["10-onboard-peering"]="Peer Hub to New DB Account VPC"
+STEP_LABELS["11-update-images"]="Update ECS image versions"
 
 # =============================================================================
 # ACCOUNT LABELS (for display in account switch banners)
@@ -93,6 +99,7 @@ declare -A ACCOUNT_LABELS
 ACCOUNT_LABELS["jit-workload"]="JIT Workload Account"
 ACCOUNT_LABELS["db-account"]="Database/RDS Account"
 ACCOUNT_LABELS["management"]="Management Account (SSO)"
+ACCOUNT_LABELS["current"]="Current AWS account"
 
 # Map account context → config field for account ID
 declare -A ACCOUNT_ID_FIELD
