@@ -1,0 +1,22 @@
+# Add the rsyslog drop-in ConfigMap mount. start-worker.sh starts rsyslogd
+# only when this file is present.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wazuh-manager-worker
+  namespace: wazuh
+spec:
+  template:
+    spec:
+      volumes:
+        - name: wazuh-rsyslog-forward
+          configMap:
+            name: wazuh-rsyslog-forward
+            defaultMode: 0o444
+      containers:
+        - name: wazuh-manager
+          volumeMounts:
+            - name: wazuh-rsyslog-forward
+              mountPath: /etc/rsyslog.d/60-wazuh-archives.conf
+              subPath: 60-wazuh-archives.conf
+              readOnly: true

@@ -12,6 +12,16 @@ fi
 
 source ~/jit-infra.env
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/image-tags.sh"
+
+if [ -z "${IMAGE_TAG:-}" ]; then
+  echo "IMAGE_TAG is missing from ~/jit-infra.env"
+  echo "Re-run ./1.sync-acr.sh and enter the image tag."
+  exit 1
+fi
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "JIT Database Access - ACI Deployment"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -101,7 +111,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 az container create \
   --resource-group $RESOURCE_GROUP --name postgresql \
-  --image $ACR_SERVER/cloudanix/ecr-aws-jit-postgresql:latest \
+  --image $ACR_SERVER/$DB_POSTGRES_REPO:$IMAGE_TAG \
   --registry-login-server $ACR_SERVER \
   --registry-username $ACR_USER \
   --registry-password $ACR_PASS \
@@ -131,7 +141,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 az container create \
   --resource-group $RESOURCE_GROUP --name proxysql \
-  --image $ACR_SERVER/cloudanix/ecr-aws-jit-proxy-sql:latest \
+  --image $ACR_SERVER/$DB_PROXYSQL_REPO:$IMAGE_TAG \
   --registry-login-server $ACR_SERVER \
   --registry-username $ACR_USER \
   --registry-password $ACR_PASS \
@@ -163,7 +173,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 az container create \
   --resource-group $RESOURCE_GROUP --name proxyserver \
-  --image $ACR_SERVER/cloudanix/ecr-aws-jit-proxy-server:latest \
+  --image $ACR_SERVER/$DB_PROXYSERVER_REPO:$IMAGE_TAG \
   --registry-login-server $ACR_SERVER \
   --registry-username $ACR_USER \
   --registry-password $ACR_PASS \
@@ -197,7 +207,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 az container create \
   --resource-group $RESOURCE_GROUP --name query-logging \
-  --image $ACR_SERVER/cloudanix/ecr-aws-jit-query-logging:latest \
+  --image $ACR_SERVER/$DB_QUERYLOG_REPO:$IMAGE_TAG \
   --registry-login-server $ACR_SERVER \
   --registry-username $ACR_USER \
   --registry-password $ACR_PASS \
@@ -230,7 +240,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 az container create \
   --resource-group $RESOURCE_GROUP --name dam-server \
-  --image $ACR_SERVER/cloudanix/ecr-aws-jit-dam-server:latest \
+  --image $ACR_SERVER/$DB_DAM_REPO:$IMAGE_TAG \
   --registry-login-server $ACR_SERVER \
   --registry-username $ACR_USER \
   --registry-password $ACR_PASS \

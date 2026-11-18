@@ -1,0 +1,741 @@
+#!/usr/bin/env bash
+# =============================================================================
+# AWS JIT Database — Master Orchestrator
+# =============================================================================
+# Usage:
+#   ./setup.sh            — Run the setup wizard
+#   ./setup.sh --cleanup  — Tear down resources created by a previous setup
+# =============================================================================
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$(cd "$SCRIPT_DIR/../lib" && pwd)"
+
+# Source shared library
+if [[ ! -f "$LIB_DIR/common.sh" ]]; then
+    echo "[ERROR] Shared library not found: $LIB_DIR/common.sh" >&2
+    echo "        Expected at: $LIB_DIR/common.sh" >&2
+    exit 1
+fi
+source "$LIB_DIR/common.sh"
+
+# Source configuration schema
+source "$SCRIPT_DIR/config.sh"
+
+# State file location
+STATE_FILE="$SCRIPT_DIR/.state.json"
+
+# =============================================================================
+# ARGUMENT PARSING
+# =============================================================================
+# Supported (customer-facing): --cleanup, --share
+# Hidden (internal/ops):        --sync-ecr
+#   --sync-ecr switches image sourcing from the default ECR pull-through cache
+#   to the legacy docker pull/tag/push sync. Not shown in help or the menu.
+# =============================================================================
+
+MODE_ARG=""
+CDX_ECR_MODE="pull-through"   # default: silent pull-through cache
+for _arg in "$@"; do
+    case "$_arg" in
+        --sync-ecr) CDX_ECR_MODE="sync" ;;
+        --cleanup|--share) MODE_ARG="$_arg" ;;
+        *) ;;
+    esac
+done
+export CDX_ECR_MODE
+
+# =============================================================================
+# CLEANUP MODE
+# =============================================================================
+
+if [[ "$MODE_ARG" == "--cleanup" ]]; then
+    echo ""
+    echo -e "${_CLR_BOLD}=== Cleanup: $SETUP_DISPLAY_NAME ===${_CLR_RESET}"
+    echo ""
+
+    # Cleanup is DISCOVERY-BASED and does not require a state file. If state
+    # exists, show a summary of completed steps as a courtesy; otherwise the
+    # cleanup script finds resources by their well-known names and tags.
+    if [[ -f "$STATE_FILE" ]] && local_state=$(load_state "$STATE_FILE" 2>/dev/null); then
+        echo "The following steps were recorded as completed:"
+        echo ""
+        scope_mode=$(echo "$local_state" | jq -r '.scope_mode')
+        steps_str="${STEPS_FOR_MODE[$scope_mode]:-}"
+        all_steps=($steps_str)
+        for s in "${all_steps[@]}"; do
+            if is_step_complete "$STATE_FILE" "$s"; then
+                label="${STEP_LABELS[$s]:-$s}"
+                account="${STEP_ACCOUNT[$s]:-unknown}"
+                echo "  ✓ $label (${ACCOUNT_LABELS[$account]:-$account})"
+            fi
+        done
+        echo ""
+    else
+        info "No (valid) state file found — running discovery-based cleanup."
+        info "Resources will be located by their well-known names and tags."
+        echo ""
+    fi
+
+    warn "This removes JIT VM resources discovered in the CURRENT account/region."
+    if ! prompt_yes_no "Proceed with cleanup? This will remove created resources" "n"; then
+        info "Cleanup cancelled."
+        exit 0
+    fi
+
+    if [[ -f "$SCRIPT_DIR/cleanup/cleanup.sh" ]]; then
+        source "$SCRIPT_DIR/cleanup/cleanup.sh"
+    else
+        error "No cleanup script found at $SCRIPT_DIR/cleanup/cleanup.sh"
+        exit 1
+    fi
+    exit 0
+fi
+
+# =============================================================================
+# SHARE MODE — print the infra details Cloudanix needs (no secrets)
+# =============================================================================
+
+if [[ "$MODE_ARG" == "--share" ]]; then
+    cdx_share_summary "$STATE_FILE" "$SETUP_TYPE"
+    exit $?
+fi
+
+# =============================================================================
+# MAIN SETUP FLOW
+# =============================================================================
+
+echo ""
+echo -e "${_CLR_BOLD}╔══════════════════════════════════════════════════════════════════╗${_CLR_RESET}"
+echo -e "${_CLR_BOLD}║            $SETUP_DISPLAY_NAME Setup                            ║${_CLR_RESET}"
+echo -e "${_CLR_BOLD}╚══════════════════════════════════════════════════════════════════╝${_CLR_RESET}"
+echo ""
+
+# Check prerequisites
+check_prerequisites "${PREREQUISITES[@]}" || exit 1
+ok "All prerequisites available: ${PREREQUISITES[*]}"
+
+# =============================================================================
+# STATE: RESUME OR FRESH
+# =============================================================================
+
+RESUME_MODE=false
+SELECTED_SCOPE_MODE=""
+
+if [[ -f "$STATE_FILE" ]]; then
+    local_state=$(load_state "$STATE_FILE")
+    if [[ $? -eq 0 ]]; then
+        existing_scope=$(echo "$local_state" | jq -r '.scope_mode')
+        existing_label=""
+        for i in "${!SCOPE_MODES[@]}"; do
+            if [[ "${SCOPE_MODES[$i]}" == "$existing_scope" ]]; then
+                existing_label="${SCOPE_MODE_LABELS[$i]}"
+                break
+            fi
+        done
+
+        echo ""
+        info "Found existing setup state (scope: $existing_label)"
+        echo ""
+
+        if prompt_yes_no "Resume from where you left off?" "y"; then
+            RESUME_MODE=true
+            SELECTED_SCOPE_MODE="$existing_scope"
+        else
+            if prompt_yes_no "Start fresh? (This will delete the existing state)" "n"; then
+                rm -f "$STATE_FILE"
+                info "Previous state cleared."
+            else
+                info "Exiting. State file preserved."
+                exit 0
+            fi
+        fi
+    else
+        warn "State file exists but is corrupted."
+        if prompt_yes_no "Start fresh? (This will delete the corrupted state)" "n"; then
+            rm -f "$STATE_FILE"
+        else
+            error "Cannot proceed with corrupted state file. Exiting."
+            exit 1
+        fi
+    fi
+fi
+
+# =============================================================================
+# SCOPE MODE SELECTION
+# =============================================================================
+
+if [[ -z "$SELECTED_SCOPE_MODE" ]]; then
+    prompt_selection "Select deployment scope:" "${SCOPE_MODE_LABELS[@]}" || {
+        error "Failed to select scope mode."
+        exit 1
+    }
+
+    # Map label back to mode identifier
+    for i in "${!SCOPE_MODE_LABELS[@]}"; do
+        if [[ "${SCOPE_MODE_LABELS[$i]}" == "$CDX_SELECTED" ]]; then
+            SELECTED_SCOPE_MODE="${SCOPE_MODES[$i]}"
+            break
+        fi
+    done
+fi
+
+info "Scope mode: $SELECTED_SCOPE_MODE"
+
+# =============================================================================
+# DETERMINE STEPS FOR SELECTED MODE
+# =============================================================================
+
+STEPS_STR="${STEPS_FOR_MODE[$SELECTED_SCOPE_MODE]}"
+ALL_STEPS=($STEPS_STR)
+
+# Is this scope one that installs ECS workloads (and thus needs images)?
+_MODE_IS_SYNC_ELIGIBLE=false
+for _m in ${SYNC_ELIGIBLE_MODES:-}; do
+    [[ "$_m" == "$SELECTED_SCOPE_MODE" ]] && _MODE_IS_SYNC_ELIGIBLE=true && break
+done
+
+# In --sync-ecr mode, insert the (hidden) docker sync step just after the
+# permission-set step so images land in the customer's private ECR before the
+# workload install, while preserving account ordering.
+if [[ "$CDX_ECR_MODE" == "sync" && "$_MODE_IS_SYNC_ELIGIBLE" == true && -n "${SYNC_STEP_ID:-}" ]]; then
+    if [[ " ${ALL_STEPS[*]} " != *" ${SYNC_STEP_ID} "* ]]; then
+        _REBUILT=()
+        _INSERTED=false
+        for _s in "${ALL_STEPS[@]}"; do
+            _REBUILT+=("$_s")
+            if [[ "$_s" == "01-create-permission-set" ]]; then
+                _REBUILT+=("$SYNC_STEP_ID")
+                _INSERTED=true
+            fi
+        done
+        if [[ "$_INSERTED" == false ]]; then
+            _REBUILT=("$SYNC_STEP_ID" "${ALL_STEPS[@]}")
+        fi
+        ALL_STEPS=("${_REBUILT[@]}")
+    fi
+    info "ECR mode: docker sync (--sync-ecr) — images will be pushed to your private ECR"
+else
+    info "ECR mode: pull-through cache (default)"
+fi
+
+TOTAL_STEPS=${#ALL_STEPS[@]}
+
+# =============================================================================
+# CONFIGURATION COLLECTION
+# =============================================================================
+
+if [[ "$RESUME_MODE" == false ]]; then
+    init_state "$STATE_FILE" "$SETUP_TYPE" "$SELECTED_SCOPE_MODE"
+
+    # Auto-detect values for smart defaults
+    _CURRENT_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null || echo "")
+    _SSO_INSTANCE_ARN=$(aws sso-admin list-instances --query "Instances[0].InstanceArn" --output text 2>/dev/null || echo "")
+
+    # Discover the existing JIT hub VPC (for onboard scopes) via the ECS SG
+    # created by the original VM setup (cdx-jit-vm-ecs-sg).
+    _HUB_ECS_SG=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=cdx-jit-vm-ecs-sg" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "")
+    _HUB_VPC=""; _HUB_CIDR=""
+    if [[ -n "$_HUB_ECS_SG" && "$_HUB_ECS_SG" != "None" ]]; then
+        _HUB_VPC=$(aws ec2 describe-security-groups --group-ids "$_HUB_ECS_SG" --query 'SecurityGroups[0].VpcId' --output text 2>/dev/null || echo "")
+        [[ -n "$_HUB_VPC" && "$_HUB_VPC" != "None" ]] && _HUB_CIDR=$(aws ec2 describe-vpcs --vpc-ids "$_HUB_VPC" --query 'Vpcs[0].CidrBlock' --output text 2>/dev/null || echo "")
+    fi
+
+    step "Configuration"
+    echo ""
+    info "Please provide the following values. Press Enter to accept defaults."
+    echo ""
+
+    for field_def in "${CONFIG_FIELDS[@]}"; do
+        IFS='|' read -r field_name field_rule field_default field_prompt field_scopes field_sensitive <<< "$field_def"
+
+        # Check if this field applies to the selected scope mode
+        if [[ "$field_scopes" != "*" ]]; then
+            IFS=',' read -ra applicable_modes <<< "$field_scopes"
+            applies=false
+            for mode in "${applicable_modes[@]}"; do
+                if [[ "$mode" == "$SELECTED_SCOPE_MODE" ]]; then
+                    applies=true
+                    break
+                fi
+            done
+            if [[ "$applies" == false ]]; then
+                continue
+            fi
+        fi
+
+        # Resolve auto-defaults
+        if [[ "$field_default" == "__AUTO_SSO__" ]]; then
+            field_default="${_SSO_INSTANCE_ARN:-}"
+        elif [[ "$field_default" == "__AUTO_HUB_VPC__" ]]; then
+            field_default="${_HUB_VPC:-}"
+        elif [[ "$field_default" == "__AUTO_HUB_CIDR__" ]]; then
+            field_default="${_HUB_CIDR:-}"
+        elif [[ "$field_default" == "__AUTO_BUCKET__" ]]; then
+            # Use JIT account ID if already collected, otherwise current account
+            _jit_id=$(get_config_value "$STATE_FILE" "JIT_ACCOUNT_ID" 2>/dev/null || echo "")
+            field_default="cdx-jit-db-logs-${_jit_id:-${_CURRENT_ACCOUNT_ID:-unknown}}"
+        fi
+
+        # Prompt for value with validation
+        while true; do
+            value=$(prompt_with_default "$field_prompt" "$field_default")
+            if validate "$value" "$field_rule"; then
+                set_config_value "$STATE_FILE" "$field_name" "$value"
+                break
+            else
+                warn "Invalid format. Expected: $field_rule"
+            fi
+        done
+    done
+
+    # Display configuration summary
+    echo ""
+    step "Configuration Summary"
+    echo ""
+
+    for field_def in "${CONFIG_FIELDS[@]}"; do
+        IFS='|' read -r field_name field_rule field_default field_prompt field_scopes field_sensitive <<< "$field_def"
+
+        if [[ "$field_scopes" != "*" ]]; then
+            IFS=',' read -ra applicable_modes <<< "$field_scopes"
+            applies=false
+            for mode in "${applicable_modes[@]}"; do
+                if [[ "$mode" == "$SELECTED_SCOPE_MODE" ]]; then
+                    applies=true
+                    break
+                fi
+            done
+            if [[ "$applies" == false ]]; then
+                continue
+            fi
+        fi
+
+        stored_value=$(get_config_value "$STATE_FILE" "$field_name")
+        if [[ "$field_sensitive" == "true" ]]; then
+            masked=$(mask_sensitive "$stored_value")
+            echo "  $field_prompt: $masked"
+        else
+            echo "  $field_prompt: $stored_value"
+        fi
+    done
+
+    echo ""
+    if ! prompt_yes_no "Proceed with these values?" "y"; then
+        info "You can re-run the script to change values. State has been saved."
+        exit 0
+    fi
+fi
+
+# =============================================================================
+# RE-PROMPT MISSING CONFIG ON RESUME
+# =============================================================================
+
+if [[ "$RESUME_MODE" == true ]]; then
+    _CURRENT_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null || echo "")
+    _SSO_INSTANCE_ARN=$(aws sso-admin list-instances --query "Instances[0].InstanceArn" --output text 2>/dev/null || echo "")
+
+    _HUB_ECS_SG=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=cdx-jit-vm-ecs-sg" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "")
+    _HUB_VPC=""; _HUB_CIDR=""
+    if [[ -n "$_HUB_ECS_SG" && "$_HUB_ECS_SG" != "None" ]]; then
+        _HUB_VPC=$(aws ec2 describe-security-groups --group-ids "$_HUB_ECS_SG" --query 'SecurityGroups[0].VpcId' --output text 2>/dev/null || echo "")
+        [[ -n "$_HUB_VPC" && "$_HUB_VPC" != "None" ]] && _HUB_CIDR=$(aws ec2 describe-vpcs --vpc-ids "$_HUB_VPC" --query 'Vpcs[0].CidrBlock' --output text 2>/dev/null || echo "")
+    fi
+
+    MISSING_CONFIG=false
+    for field_def in "${CONFIG_FIELDS[@]}"; do
+        IFS='|' read -r field_name field_rule field_default field_prompt field_scopes field_sensitive <<< "$field_def"
+
+        if [[ "$field_scopes" != "*" ]]; then
+            IFS=',' read -ra applicable_modes <<< "$field_scopes"
+            applies=false
+            for mode in "${applicable_modes[@]}"; do
+                if [[ "$mode" == "$SELECTED_SCOPE_MODE" ]]; then applies=true; break; fi
+            done
+            [[ "$applies" == false ]] && continue
+        fi
+
+        stored=$(get_config_value "$STATE_FILE" "$field_name")
+        if [[ -z "$stored" ]]; then
+            if [[ "$MISSING_CONFIG" == false ]]; then
+                echo ""
+                info "Some configuration values are missing. Please provide them:"
+                echo ""
+                MISSING_CONFIG=true
+            fi
+
+            if [[ "$field_default" == "__AUTO_SSO__" ]]; then
+                field_default="${_SSO_INSTANCE_ARN:-}"
+            elif [[ "$field_default" == "__AUTO_HUB_VPC__" ]]; then
+                field_default="${_HUB_VPC:-}"
+            elif [[ "$field_default" == "__AUTO_HUB_CIDR__" ]]; then
+                field_default="${_HUB_CIDR:-}"
+            elif [[ "$field_default" == "__AUTO_BUCKET__" ]]; then
+                _jit_id=$(get_config_value "$STATE_FILE" "JIT_ACCOUNT_ID" 2>/dev/null || echo "")
+                field_default="cdx-jit-db-logs-${_jit_id:-${_CURRENT_ACCOUNT_ID:-unknown}}"
+            fi
+
+            while true; do
+                value=$(prompt_with_default "$field_prompt" "$field_default")
+                if validate "$value" "$field_rule"; then
+                    set_config_value "$STATE_FILE" "$field_name" "$value"
+                    break
+                else
+                    warn "Invalid format. Expected: $field_rule"
+                fi
+            done
+        fi
+    done
+fi
+
+# =============================================================================
+# COLLECT CREDENTIALS FOR ALL ACCOUNTS UP FRONT
+# =============================================================================
+# We determine which unique accounts are needed for the remaining steps,
+# then ask for credentials for each one before any infrastructure work starts.
+# This way the user does all the access-portal work at the beginning.
+# =============================================================================
+
+step "Account Credentials"
+echo ""
+info "We need credentials for each AWS account involved in this setup."
+info "For each account, paste the temporary credentials from your AWS Access Portal."
+echo ""
+
+# Determine unique accounts needed for remaining (incomplete) steps
+declare -A ACCOUNT_CREDS_COLLECTED
+ACCOUNTS_NEEDED=()
+
+for step_id in "${ALL_STEPS[@]}"; do
+    # Skip already completed steps
+    if is_step_complete "$STATE_FILE" "$step_id"; then
+        continue
+    fi
+
+    step_account="${STEP_ACCOUNT[$step_id]:-unknown}"
+    if [[ -z "${ACCOUNT_CREDS_COLLECTED[$step_account]:-}" ]]; then
+        ACCOUNTS_NEEDED+=("$step_account")
+        ACCOUNT_CREDS_COLLECTED["$step_account"]="pending"
+    fi
+done
+
+if [[ ${#ACCOUNTS_NEEDED[@]} -eq 0 ]]; then
+    info "All steps already complete!"
+else
+    echo ""
+    echo -e "${_CLR_DIM}  Tip: if a single account covers all steps, you can 'export' the three AWS_"
+    echo -e "  credential variables in this shell BEFORE running ./setup.sh — the script"
+    echo -e "  detects matching credentials automatically and skips the prompts below.${_CLR_RESET}"
+
+    # Store credentials in associative arrays keyed by account context
+    declare -A CREDS_ACCESS_KEY
+    declare -A CREDS_SECRET_KEY
+    declare -A CREDS_SESSION_TOKEN
+    # Cache collected creds keyed by AWS account ID so multiple step contexts
+    # that resolve to the same account are only prompted for once.
+    declare -A CREDS_BY_ID_AK
+    declare -A CREDS_BY_ID_SK
+    declare -A CREDS_BY_ID_ST
+
+    for acct_context in "${ACCOUNTS_NEEDED[@]}"; do
+        account_label="${ACCOUNT_LABELS[$acct_context]:-$acct_context}"
+        account_id_field="${ACCOUNT_ID_FIELD[$acct_context]:-}"
+        expected_id=""
+        if [[ -n "$account_id_field" ]]; then
+            expected_id=$(get_config_value "$STATE_FILE" "$account_id_field")
+        fi
+
+        # If we already collected creds for this same account ID (another
+        # context maps to the same account), reuse them without re-prompting.
+        if [[ -n "$expected_id" && -n "${CREDS_BY_ID_AK[$expected_id]:-}" ]]; then
+            ok "$account_label ($expected_id) — reusing credentials already provided for this account"
+            CREDS_ACCESS_KEY["$acct_context"]="${CREDS_BY_ID_AK[$expected_id]}"
+            CREDS_SECRET_KEY["$acct_context"]="${CREDS_BY_ID_SK[$expected_id]}"
+            CREDS_SESSION_TOKEN["$acct_context"]="${CREDS_BY_ID_ST[$expected_id]}"
+            continue
+        fi
+
+        # Check if current creds already match this account
+        current_id=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null) || current_id=""
+        if [[ "$current_id" == "$expected_id" && -n "$expected_id" ]]; then
+            ok "$account_label ($expected_id) — using current credentials"
+            CREDS_ACCESS_KEY["$acct_context"]="${AWS_ACCESS_KEY_ID:-__current__}"
+            CREDS_SECRET_KEY["$acct_context"]="${AWS_SECRET_ACCESS_KEY:-__current__}"
+            CREDS_SESSION_TOKEN["$acct_context"]="${AWS_SESSION_TOKEN:-}"
+            CREDS_BY_ID_AK["$expected_id"]="${AWS_ACCESS_KEY_ID:-__current__}"
+            CREDS_BY_ID_SK["$expected_id"]="${AWS_SECRET_ACCESS_KEY:-__current__}"
+            CREDS_BY_ID_ST["$expected_id"]="${AWS_SESSION_TOKEN:-}"
+            continue
+        fi
+
+        # Prompt for credentials
+        while true; do
+            echo ""
+            echo -e "${_CLR_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${_CLR_RESET}"
+            echo -e "${_CLR_BOLD}  ${account_label}${_CLR_RESET} (${expected_id})"
+            echo -e "${_CLR_DIM}  AWS Access Portal → Select this account → 'Command line or"
+            echo -e "  programmatic access' → Copy Option 1 (environment variables)${_CLR_RESET}"
+            echo -e "${_CLR_YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${_CLR_RESET}"
+            echo ""
+            echo "  How would you like to provide credentials?"
+            echo "    1) Enter each value one at a time (recommended — paste each, press Enter)"
+            echo "    2) Paste all 3 lines at once, then Enter + Ctrl-D (fine on CloudShell)"
+            echo "    3) Open an editor and paste the 3 lines there"
+            echo ""
+            cred_method=""
+            read -erp "  Select [1-3] (default 1): " cred_method
+            cred_method="${cred_method:-1}"
+
+            access_key=""; secret_key=""; session_token=""
+            if [[ "$cred_method" == "2" ]]; then
+                echo ""
+                echo "  Paste the 3 export commands below, then press Enter and Ctrl-D:"
+                echo ""
+                pasted_text="$(cat || true)"
+                access_key=$(echo "$pasted_text" | grep 'AWS_ACCESS_KEY_ID' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
+                secret_key=$(echo "$pasted_text" | grep 'AWS_SECRET_ACCESS_KEY' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
+                session_token=$(echo "$pasted_text" | grep 'AWS_SESSION_TOKEN' | sed 's/^[^=]*=//' | tr -d '"' | tr -d "'" | xargs)
+            elif [[ "$cred_method" == "3" ]]; then
+                capture_aws_creds_via_editor access_key secret_key session_token || true
+            else
+                echo ""
+                echo -e "${_CLR_DIM}  Paste each value (or the full 'export KEY=...' line) and press Enter.${_CLR_RESET}"
+                capture_aws_creds_per_field access_key secret_key session_token || true
+            fi
+
+            if [[ -z "$access_key" || -z "$secret_key" ]]; then
+                error "Could not read credentials (need at least access key + secret key). Please try again."
+                continue
+            fi
+
+            # Verify these creds point to the right account
+            # CloudShell uses container credentials (AWS_CONTAINER_CREDENTIALS_RELATIVE_URI)
+            # which override env vars. We must unset it to force env var usage.
+            _ORIG_AK="${AWS_ACCESS_KEY_ID:-}"
+            _ORIG_SK="${AWS_SECRET_ACCESS_KEY:-}"
+            _ORIG_ST="${AWS_SESSION_TOKEN:-}"
+            _ORIG_CONTAINER_CREDS="${AWS_CONTAINER_CREDENTIALS_RELATIVE_URI:-}"
+            export AWS_ACCESS_KEY_ID="$access_key"
+            export AWS_SECRET_ACCESS_KEY="$secret_key"
+            export AWS_SESSION_TOKEN="$session_token"
+            export AWS_EC2_METADATA_DISABLED=true
+            unset AWS_CONTAINER_CREDENTIALS_RELATIVE_URI 2>/dev/null || true
+
+            actual_id=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null) || actual_id=""
+
+            # Restore original creds and container URI
+            export AWS_ACCESS_KEY_ID="$_ORIG_AK"
+            export AWS_SECRET_ACCESS_KEY="$_ORIG_SK"
+            export AWS_SESSION_TOKEN="$_ORIG_ST"
+            if [[ -n "$_ORIG_CONTAINER_CREDS" ]]; then
+                export AWS_CONTAINER_CREDENTIALS_RELATIVE_URI="$_ORIG_CONTAINER_CREDS"
+            fi
+            unset AWS_EC2_METADATA_DISABLED
+
+            if [[ "$actual_id" != "$expected_id" ]]; then
+                error "Account mismatch! Expected: $expected_id, Got: ${actual_id:-<auth failed>}"
+                error "Please paste credentials for the correct account."
+                continue
+            fi
+
+            ok "$account_label ($expected_id) — verified ✓"
+            CREDS_ACCESS_KEY["$acct_context"]="$access_key"
+            CREDS_SECRET_KEY["$acct_context"]="$secret_key"
+            CREDS_SESSION_TOKEN["$acct_context"]="$session_token"
+            # Cache by account ID so other contexts on the same account reuse these.
+            CREDS_BY_ID_AK["$expected_id"]="$access_key"
+            CREDS_BY_ID_SK["$expected_id"]="$secret_key"
+            CREDS_BY_ID_ST["$expected_id"]="$session_token"
+            break
+        done
+    done
+
+    echo ""
+    ok "All account credentials collected and verified"
+fi
+
+# =============================================================================
+# STEP EXECUTION LOOP
+# =============================================================================
+
+step "Executing Setup Steps"
+echo ""
+info "Total steps: $TOTAL_STEPS"
+
+# Steps that prompt the user must run attached to the terminal (no output pipe),
+# otherwise buffered prompt text appears only after the user blindly hits Enter.
+INTERACTIVE_STEPS="06-store-ssh-key"
+
+CURRENT_ACCOUNT=""
+STEP_NUM=0
+
+for step_id in "${ALL_STEPS[@]}"; do
+    STEP_NUM=$((STEP_NUM + 1))
+
+    # Skip completed steps
+    if is_step_complete "$STATE_FILE" "$step_id"; then
+        info "[Step ${STEP_NUM}/${TOTAL_STEPS}] ${STEP_LABELS[$step_id]:-$step_id} — already complete, skipping"
+        continue
+    fi
+
+    step_label="${STEP_LABELS[$step_id]:-$step_id}"
+    step_account="${STEP_ACCOUNT[$step_id]:-unknown}"
+
+    # Switch credentials if account context changed
+    if [[ "$step_account" != "$CURRENT_ACCOUNT" ]]; then
+        account_label="${ACCOUNT_LABELS[$step_account]:-$step_account}"
+
+        # Apply stored credentials for this account
+        if [[ "${CREDS_ACCESS_KEY[$step_account]:-}" == "__current__" ]]; then
+            # Restore container credentials for current account
+            if [[ -n "${_ORIG_CONTAINER_CREDS:-}" ]]; then
+                export AWS_CONTAINER_CREDENTIALS_RELATIVE_URI="$_ORIG_CONTAINER_CREDS"
+            fi
+            unset AWS_EC2_METADATA_DISABLED 2>/dev/null || true
+            info "Using current credentials for $account_label"
+        elif [[ -n "${CREDS_ACCESS_KEY[$step_account]:-}" ]]; then
+            export AWS_ACCESS_KEY_ID="${CREDS_ACCESS_KEY[$step_account]}"
+            export AWS_SECRET_ACCESS_KEY="${CREDS_SECRET_KEY[$step_account]}"
+            export AWS_SESSION_TOKEN="${CREDS_SESSION_TOKEN[$step_account]}"
+            export AWS_EC2_METADATA_DISABLED=true
+            unset AWS_CONTAINER_CREDENTIALS_RELATIVE_URI 2>/dev/null || true
+            info "Switched to: $account_label"
+        else
+            # No credentials were collected for this account context. Running the
+            # step would silently use the PREVIOUS step's credentials (wrong
+            # account), which has caused resources to be created in the wrong
+            # account (e.g. the SSH-keys secret). Fail loudly instead.
+            error "No credentials available for '$account_label' (context: $step_account)."
+            error "Step '$step_label' must run in that account. This usually means"
+            error "the account ID for it was not provided during configuration."
+            error "Re-run setup and supply credentials for $account_label."
+            exit 1
+        fi
+
+        # -------------------------------------------------------------------
+        # POST-SWITCH ACCOUNT VERIFICATION (fail-closed)
+        # -------------------------------------------------------------------
+        # Whatever path we took above (stored creds OR the __current__ shortcut),
+        # verify that the credentials now active actually resolve to the account
+        # this step is supposed to run in. This is the backstop that prevents a
+        # step from executing against the wrong account — e.g. the SSH-keys
+        # secret landing in the VM target account because the __current__
+        # CloudShell credentials belonged to the VM account, not the JIT account.
+        expected_acct_field="${ACCOUNT_ID_FIELD[$step_account]:-}"
+        expected_acct_id=""
+        if [[ -n "$expected_acct_field" ]]; then
+            expected_acct_id=$(get_config_value "$STATE_FILE" "$expected_acct_field")
+        fi
+
+        if [[ -n "$expected_acct_id" ]]; then
+            active_acct_id=$(aws sts get-caller-identity --query "Account" --output text 2>/dev/null) || active_acct_id=""
+            if [[ -z "$active_acct_id" ]]; then
+                error "Could not resolve the active AWS account before running '$step_label'."
+                error "Cannot verify it targets $account_label ($expected_acct_id). Aborting."
+                exit 1
+            fi
+            if [[ "$active_acct_id" != "$expected_acct_id" ]]; then
+                error "Account verification FAILED for step '$step_label'."
+                error "  Active account   : $active_acct_id"
+                error "  Expected account : $expected_acct_id ($account_label)"
+                error ""
+                error "The active credentials do not belong to the account this step must"
+                error "run in. This most often happens on CloudShell when 'current'"
+                error "credentials (the account CloudShell runs in) were reused for a"
+                error "different account context. Re-run setup and paste real credentials"
+                error "for $account_label — do NOT rely on current/CloudShell credentials"
+                error "when the step account differs from the CloudShell account."
+                exit 1
+            fi
+            ok "Account verified for $account_label: $active_acct_id"
+        else
+            warn "No expected account ID configured for '$account_label' — skipping verification."
+        fi
+
+        CURRENT_ACCOUNT="$step_account"
+    fi
+
+    # Display progress
+    show_progress "$STEP_NUM" "$TOTAL_STEPS" "$step_label"
+
+    # Build environment for step script
+    step_script="$SCRIPT_DIR/steps/${step_id}.sh"
+    if [[ ! -f "$step_script" ]]; then
+        error "Step script not found: $step_script"
+        exit 1
+    fi
+
+    # Export all config values as environment variables
+    config_json=$(jq -r '.config' "$STATE_FILE")
+    while IFS='=' read -r key value; do
+        export "$key=$value"
+    done < <(echo "$config_json" | jq -r 'to_entries[] | "\(.key)=\(.value)"')
+
+    # Export outputs from all previous completed steps
+    steps_json=$(jq -r '.steps' "$STATE_FILE")
+    while IFS='=' read -r key value; do
+        if [[ -n "$key" ]] && [[ "$key" != "null" ]]; then
+            export "$key=$value"
+        fi
+    done < <(echo "$steps_json" | jq -r '[.[] | select(.status == "complete") | .outputs // {} | to_entries[]] | .[] | "\(.key)=\(.value)"')
+
+    # Execute step script. Steps that prompt the user (interactive) must run
+    # attached directly to the terminal — piping their stdout through tee|grep
+    # buffers prompt text so it appears only after the user blindly presses
+    # Enter. Non-interactive steps are streamed via tee so long AWS waits don't
+    # look like a hang, while OUTPUT: lines are hidden live and parsed after.
+    step_exit_code=0
+    step_log=$(mktemp "${TMPDIR:-/tmp}/cdx-step.XXXXXX")
+    case " $INTERACTIVE_STEPS " in
+        *" $step_id "*)
+            # Interactive: no pipe on the main data path so prompts are not
+            # buffered. Tee a copy to the log via process substitution (stdout
+            # still reaches the terminal through /dev/tty).
+            set +e
+            bash "$step_script" > >(tee "$step_log" >/dev/tty) 2>&1
+            step_exit_code=$?
+            set -e
+            # Let the tee process-substitution flush to the log before parsing.
+            sleep 1
+            ;;
+        *)
+            set +e
+            bash "$step_script" 2>&1 | tee "$step_log" | grep -v "^OUTPUT:"
+            step_exit_code=${PIPESTATUS[0]}
+            set -e
+            ;;
+    esac
+    step_output=$(cat "$step_log")
+    rm -f "$step_log"
+
+    if [[ $step_exit_code -ne 0 ]]; then
+        error "Step '$step_label' failed with exit code $step_exit_code"
+        error "Progress has been saved. Re-run to resume from this step."
+        exit $step_exit_code
+    fi
+
+    # Parse OUTPUT lines and save to state
+    outputs_json=$(parse_step_output "$step_output")
+    mark_step_complete "$STATE_FILE" "$step_id" "$outputs_json"
+    ok "$step_label — complete"
+done
+
+# =============================================================================
+# COMPLETION SUMMARY
+# =============================================================================
+
+echo ""
+echo -e "${_CLR_BOLD}╔══════════════════════════════════════════════════════════════════╗${_CLR_RESET}"
+echo -e "${_CLR_BOLD}║  ✅  Setup Complete!                                             ║${_CLR_RESET}"
+echo -e "${_CLR_BOLD}╚══════════════════════════════════════════════════════════════════╝${_CLR_RESET}"
+echo ""
+echo "  Setup Type: $SETUP_DISPLAY_NAME"
+echo "  Scope Mode: $SELECTED_SCOPE_MODE"
+echo ""
+echo "  Steps completed:"
+for step_id in "${ALL_STEPS[@]}"; do
+    echo "    ✓ ${STEP_LABELS[$step_id]:-$step_id}"
+done
+echo ""
+echo "  To tear down: ./setup.sh --cleanup"
+echo ""

@@ -1,0 +1,32 @@
+# Optional overlay: UDP/514 archive forwarding from Wazuh workers.
+#
+# Do NOT apply this for every customer. Default deploy is still:
+#   kubectl apply -k ../aws-customer
+#
+# Enable only for a customer that needs archive syslog forwarding:
+#   ../../apply.sh --forward --target <ip-or-host>
+#
+# apply.sh fills generated/ from templates (target IP, logall worker.conf)
+# then applies this overlay. generated/ is gitignored.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: wazuh
+
+resources:
+  - ../aws-customer
+
+configMapGenerator:
+  - name: wazuh-rsyslog-forward
+    options:
+      disableNameSuffixHash: true
+    files:
+      - 60-wazuh-archives.conf=generated/60-wazuh-archives.conf
+  - name: wazuh-conf
+    behavior: merge
+    files:
+      - worker.conf=generated/worker.conf
+
+patchesStrategicMerge:
+  - worker-sts-rsyslog.yaml

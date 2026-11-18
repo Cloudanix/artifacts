@@ -1,0 +1,57 @@
+# AWS customer EKS overlay
+#
+# Reuses the shared Wazuh base (the same source of truth as the GKE deploys) and
+# layers on the AWS/EKS-specific state:
+#   - gp3 StorageClass via the EBS CSI driver (storage-class.yaml)
+#   - 3 indexers / 1 master / 3 workers with resources + node placement
+#   - workers pinned to the tainted worker-ng; everything else on general-ng
+#   - internet-facing NLB Services (services.yaml) for 55000 / 1514 / 1515
+#
+# NLBs are created by the AWS Load Balancer Controller from the Services below
+# (provisioned by infra/deploy.sh). The base AWS NLB services (name=wazuh,
+# name=wazuh-workers) are removed here and replaced by services.yaml so we control
+# the annotations (internet-facing, subnet targeting).
+#
+# Build / apply:
+#   kubectl kustomize envs/aws-customer
+#   kubectl apply -k envs/aws-customer
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: wazuh
+
+resources:
+  # Self-contained copy of the shared Wazuh base (previously referenced the
+  # central-vm/wazuh-kubernetes tree). Vendored here so this playbook deploys in a
+  # customer environment that will NOT have the central-vm sources.
+  - ../../base
+
+# Strategic-merge patches (each file may contain multiple documents; they merge
+# onto base resources by kind+name). services.yaml converts the master/workers
+# Services to internet-facing NLBs.
+patchesStrategicMerge:
+  - storage-class.yaml
+  - indexer-resources.yaml
+  - dashboard-resources.yaml
+  - wazuh-master-resources.yaml
+  - wazuh-worker-resources.yaml
+  - services.yaml
+
+# NOTE: no annotation-wipe patch is needed. The vendored base no longer pins
+# environment-specific subnets, and services.yaml uses `$patch: replace` on the
+# annotations map so the base's legacy in-tree annotations are fully replaced by
+# the modern LB Controller (external / internet-facing / cross-zone) set.
+
+# Central image override. Defaults to the Cloudanix public ECR release, so a
+# bare `kubectl apply -k envs/aws-customer` deploys the current managers.
+# To pull from your own registry (e.g. a QA account's private ECR) pass
+# `./apply.sh --image-registry <registry> --image-tag <tag>` instead of editing
+# this file — apply.sh rewrites newName/newTag on a temporary copy.
+images:
+  - name: public.ecr.aws/cloudanix/wazuh-master-custom
+    newName: public.ecr.aws/cloudanix/wazuh-master-custom
+    newTag: v0.2.5
+  - name: public.ecr.aws/cloudanix/wazuh-worker-custom
+    newName: public.ecr.aws/cloudanix/wazuh-worker-custom
+    newTag: v0.2.5
