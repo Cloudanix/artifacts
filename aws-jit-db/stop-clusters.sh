@@ -6,9 +6,10 @@
 # tasks are running, and asks which ones to stop. The prompt accepts list
 # numbers, "all", or cluster names. A typed name is used even when it is
 # not in the list, as long as that cluster is active in this region.
-# Stopping sets every service's desired count to 0 and stops remaining
-# tasks, then waits until the running count is 0. The cluster and its
-# task definitions stay.
+# It then asks whether to include DAM. No stops proxysql, proxyserver,
+# and query-logging. Yes also stops postgresql and dam-server. Every
+# other service is left running. Stopping sets the chosen services'
+# desired count to 0 and stops their tasks.
 #
 # A second prompt asks whether to delete those clusters. Deleting removes
 # the services, deregisters the task definition families they use, and
@@ -265,33 +266,102 @@ for idx in "${SELECTED[@]}"; do
 done
 echo ""
 
-if ! prompt_yes_no "Stop all tasks on the selected clusters?" "n"; then
+INCLUDE_DAM=false
+if prompt_yes_no "Include DAM services (postgresql and dam-server)?" "n"; then
+    INCLUDE_DAM=true
+fi
+
+service_kind() {
+    case "$1" in
+        proxysql|proxyserver|query-logging) echo core ;;
+        postgresql|dam-server) echo dam ;;
+        *) echo other ;;
+    esac
+}
+
+stop_service_tasks() {
+    local cluster="$1" name="$2" token="" page task
+    while true; do
+        if [[ -n "$token" ]]; then
+            page=$(aws ecs list-tasks --no-paginate --cluster "$cluster" --service-name "$name" --desired-status RUNNING --next-token "$token" --output json) || return 1
+        else
+            page=$(aws ecs list-tasks --no-paginate --cluster "$cluster" --service-name "$name" --desired-status RUNNING --output json) || return 1
+        fi
+        while IFS= read -r task; do
+            [[ -z "$task" ]] && continue
+            aws ecs stop-task --cluster "$cluster" --task "$task" \
+                --reason "Stopped by stop-clusters.sh" >/dev/null || true
+        done < <(echo "$page" | jq -r '.taskArns[]?')
+        token=$(echo "$page" | jq -r '.nextToken // empty')
+        [[ -z "$token" ]] && break
+    done
+}
+
+wait_service_stopped() {
+    local cluster="$1" name="$2" started now count
+    started=$(date +%s)
+    while true; do
+        count=$(aws ecs describe-services --cluster "$cluster" --services "$name" \
+            --query 'services[0].runningCount' --output text 2>/dev/null || echo "0")
+        [[ "$count" == "None" || -z "$count" ]] && count=0
+        if [[ "$count" -eq 0 ]]; then
+            ok "$name has 0 running tasks"
+            return 0
+        fi
+        now=$(date +%s)
+        if (( now - started >= WAIT_SECONDS )); then
+            error "$name still has $count running task(s) after ${WAIT_SECONDS}s"
+            return 1
+        fi
+        info "$name still has $count running task(s). Checking again in ${POLL_SECONDS}s."
+        sleep "$POLL_SECONDS"
+    done
+}
+
+echo ""
+step "Services"
+STOP_CLUSTERS=()
+STOP_SERVICES=()
+for idx in "${SELECTED[@]}"; do
+    cluster="${NAMES[$idx]}"
+    while IFS= read -r svc; do
+        [[ -z "$svc" ]] && continue
+        name="${svc##*/}"
+        kind=$(service_kind "$name")
+        if [[ "$kind" == "core" || ( "$kind" == "dam" && "$INCLUDE_DAM" == true ) ]]; then
+            printf '  %-8s %s\n' "stop" "$name"
+            STOP_CLUSTERS+=("$cluster")
+            STOP_SERVICES+=("$name")
+        else
+            printf '  %-8s %s\n' "leave" "$name"
+        fi
+    done < <(ecs_list_services "$cluster")
+done
+echo ""
+
+if [[ ${#STOP_SERVICES[@]} -eq 0 ]]; then
+    info "None of the selected clusters have the services this choice stops."
+    exit 0
+fi
+
+if ! prompt_yes_no "Stop the services marked stop?" "n"; then
     info "Nothing stopped."
     exit 0
 fi
 
 # -----------------------------------------------------------------------------
-# Stop: desired count 0, then stop anything still running
+# Stop chosen services only
 # -----------------------------------------------------------------------------
 
 echo ""
-step "Stop tasks"
-for idx in "${SELECTED[@]}"; do
-    cluster="${NAMES[$idx]}"
-    info "Stopping $cluster"
-    while IFS= read -r svc; do
-        [[ -z "$svc" ]] && continue
-        aws ecs update-service --cluster "$cluster" --service "$svc" --desired-count 0 >/dev/null
-        ok "Desired count 0: ${svc##*/}"
-    done < <(ecs_list_services "$cluster")
-
-    while IFS= read -r task; do
-        [[ -z "$task" ]] && continue
-        aws ecs stop-task --cluster "$cluster" --task "$task" \
-            --reason "Stopped by stop-clusters.sh" >/dev/null || true
-    done < <(ecs_list_running_tasks "$cluster")
-
-    wait_until_stopped "$cluster"
+step "Stop services"
+for i in "${!STOP_SERVICES[@]}"; do
+    cluster="${STOP_CLUSTERS[$i]}"
+    name="${STOP_SERVICES[$i]}"
+    aws ecs update-service --cluster "$cluster" --service "$name" --desired-count 0 >/dev/null
+    ok "Desired count 0: $name"
+    stop_service_tasks "$cluster" "$name"
+    wait_service_stopped "$cluster" "$name"
 done
 
 # -----------------------------------------------------------------------------
@@ -299,71 +369,40 @@ done
 # -----------------------------------------------------------------------------
 
 echo ""
-if ! prompt_yes_no "Delete the selected clusters and deregister their task definitions?" "n"; then
-    info "Clusters were stopped and left in place."
+if ! prompt_yes_no "Delete the services that were stopped?" "n"; then
+    info "Stopped services were left in place."
     exit 0
 fi
 
 echo ""
-step "Delete clusters"
+step "Delete stopped services"
+for i in "${!STOP_SERVICES[@]}"; do
+    cluster="${STOP_CLUSTERS[$i]}"
+    name="${STOP_SERVICES[$i]}"
+    aws ecs delete-service --cluster "$cluster" --service "$name" --force >/dev/null
+    ok "Service deleted: $name"
+done
+
 for idx in "${SELECTED[@]}"; do
     cluster="${NAMES[$idx]}"
-    info "Deleting $cluster"
-
-    FAMILIES=()
-    while IFS= read -r svc; do
-        [[ -z "$svc" ]] && continue
-        td=$(aws ecs describe-services --cluster "$cluster" --services "$svc" \
-            --query 'services[0].taskDefinition' --output text 2>/dev/null || echo "")
-        if [[ -n "$td" && "$td" != "None" ]]; then
-            family="${td##*/}"
-            family="${family%%:*}"
-            seen=false
-            if [[ ${#FAMILIES[@]} -gt 0 ]]; then
-                for have in "${FAMILIES[@]}"; do
-                    [[ "$have" == "$family" ]] && seen=true && break
-                done
-            fi
-            [[ "$seen" == false ]] && FAMILIES+=("$family")
-        fi
-        aws ecs delete-service --cluster "$cluster" --service "$svc" --force >/dev/null
-        ok "Service deleted: ${svc##*/}"
-    done < <(ecs_list_services "$cluster")
-
     started=$(date +%s)
     while true; do
         left=$(ecs_list_services "$cluster" | grep -c . || true)
         [[ -z "$left" ]] && left=0
-        count=$(running_count "$cluster")
-        [[ "$count" == "None" || -z "$count" ]] && count=0
-        if [[ "$left" -eq 0 && "$count" -eq 0 ]]; then
+        if [[ "$left" -eq 0 ]]; then
+            aws ecs delete-cluster --cluster "$cluster" >/dev/null
+            ok "Cluster deleted: $cluster"
             break
         fi
         now=$(date +%s)
         if (( now - started >= WAIT_SECONDS )); then
-            error "$cluster still has services or running tasks. Cluster was not deleted."
-            continue 2
+            info "$cluster still has $left service(s), so the cluster stays."
+            break
         fi
-        info "$cluster still has $left service(s) and $count running task(s)."
+        info "$cluster still has $left service(s)."
         sleep "$POLL_SECONDS"
     done
-
-    if [[ ${#FAMILIES[@]} -gt 0 ]]; then
-        for family in "${FAMILIES[@]}"; do
-            while IFS= read -r td; do
-                [[ -z "$td" ]] && continue
-                aws ecs deregister-task-definition --task-definition "$td" >/dev/null
-                ok "Task definition deregistered: ${td##*/}"
-            done < <(aws ecs list-task-definitions --family-prefix "$family" --status ACTIVE \
-                --query 'taskDefinitionArns[]' --output text | tr '\t' '\n' | grep -E "/${family}:[0-9]+$" || true)
-        done
-    else
-        info "No task definitions were attached to $cluster"
-    fi
-
-    aws ecs delete-cluster --cluster "$cluster" >/dev/null
-    ok "Cluster deleted: $cluster"
 done
 
 echo ""
-ok "Selected clusters are deleted."
+ok "Stopped services are deleted. Services marked leave are unchanged."
