@@ -66,6 +66,10 @@ cilium:
     relay:
       enabled: true
       replicas: 1
+      livenessProbe:
+        timeoutSeconds: 30
+      readinessProbe:
+        timeoutSeconds: 10
       resources:
         requests:
           cpu: 100m
@@ -73,9 +77,6 @@ cilium:
         limits:
           cpu: 500m
           memory: 256Mi
-
-falco:
-  enabled: true
 
 # OKE uses CRI-O, not containerd
 vulnScanner:
