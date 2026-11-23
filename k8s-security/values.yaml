@@ -1,0 +1,376 @@
+# Default values for chart.
+# authToken: DEFAULT
+
+accountId: DEFAULT
+clusterIdentifier: DEFAULT
+clusterName: DEFAULT
+clusterDomain: DEFAULT
+scheduleAdditionMins: 5
+
+# Shared log level for all services (debug / info / warn / error).
+logLevel: warn
+
+# Shared HTTP request timeout (seconds) for listener URL API calls.
+requestTimeout: 30
+
+# Shared max retries (exponential backoff) for listener URL API calls.
+httpMaxRetries: 3
+
+# Capabilities: comma-separated list of "threats", "vulnerabilities", "compliance", "traffic", or "all".
+# On the helm command line escape the commas: --set 'capabilities=threats\,compliance'
+capabilities: "threats,vulnerabilities,compliance"
+
+# Custom labels (cost allocation, ownership, admission policies).
+# commonLabels go on every object this chart creates (Deployments, CronJobs, Jobs,
+# ConfigMaps, Secrets, Services, ServiceAccounts, RBAC, PVC, hooks) and on
+# every pod. Each component's `podLabels` (threatMonitor.podLabels, ...) adds labels
+# to that component's pods only and wins over commonLabels on a shared key.
+# The chart's own labels (app, component, app.kubernetes.io/*) always win, and custom
+# labels never enter a selector, so they can be added or changed on any upgrade.
+# The namespace is not labeled (the chart renders no Namespace); label it yourself.
+# Falco and Cilium are separate charts: also set falco.podLabels and
+# cilium.commonLabels (see chart/README.md, "Custom labels").
+#   commonLabels:
+#     cost-center: "1234"
+#     team: platform
+commonLabels: {}
+
+# CILIUM CONFIGURATION (Network Monitoring)
+cilium:
+  enabled: false
+  
+  # AWS VPC CNI chaining — Cilium attaches eBPF to ENI-backed interfaces
+  cni:
+    chainingMode: aws-cni
+    install: false
+    exclusive: false
+
+  # Cluster-pool IPAM (Cilium doesn't allocate IPs, AWS VPC CNI does)
+  ipam:
+    mode: cluster-pool
+    operator:
+      clusterPoolIPv4PodCIDRList:
+        - "10.11.0.0/16"
+
+  # Disable masquerade — AWS VPC CNI handles this
+  enableIPv4Masquerade: false
+  bpf:
+    masquerade: false
+
+  # Disable services — kube-proxy handles this
+  nodePort:
+    enabled: false
+  externalIPs:
+    enabled: false
+  hostPort:
+    enabled: false
+
+  # Routing
+  routingMode: native
+  kubeProxyReplacement: false
+
+  # No policy enforcement — pure observability
+  policyEnforcementMode: "never"
+
+  # Operator
+  operator:
+    replicas: 1
+
+  # Hubble — flow observability
+  hubble:
+    enabled: true
+    eventBufferCapacity: 65535
+    flowBufferSize: 65535
+    skipUnknownCGroupIDs: true
+    listenAddress: ":4244"
+    relay:
+      enabled: true
+      listenAddress: ":4245"
+
+# NETWORK MONITORING (Traffic Exporter)
+# UPGRADE NOTE: exporter config moved from `networkMonitoring.exporterService.*`
+# to a flat top-level `trafficExporter.*` (matching the other sensors). If you
+# upgrade from a chart that used the old path, migrate your overrides:
+#   networkMonitoring.exporterService.backend.url      -> trafficExporter.listenerUrl
+#   networkMonitoring.exporterService.hubbleRelay.address -> trafficExporter.hubbleRelayAddress
+#   networkMonitoring.exporterService.config.sender.*  -> trafficExporter.{bufferSize,bufferDuration}
+#   networkMonitoring.exporterService.config.{ingest,dedupe,flusher}.* -> trafficExporter.<flatKey>
+trafficExporter:
+    name: traffic-exporter
+    templateType: KUBERNETESTRAFFICMONITORING
+    image: docker.io/cloudanix/traffic-exporter:v2.3.7
+    replicaCount: 1
+    listenerUrl: https://events.cloudanix.com/cs
+    hubbleRelayAddress: "hubble-relay.cloudanix.svc.cluster.local:80"
+    # buffered sender -> listener
+    bufferSize: 10000
+    bufferDuration: 3600
+    # namespace filtering
+    allowedNamespaces: []
+    ignoreNamespaces:
+        - kube-system
+        - kube-public
+        - kube-node-lease
+    # The chart's own labels (app: traffic-exporter). Leave as is: on some components they
+    # are the Deployment selector, which cannot change after install.
+    labels:
+        app: traffic-exporter
+    # Extra labels for this component's pods only; win over commonLabels.
+    podLabels: {}
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    securityContext:
+      runAsUser: 1000
+      runAsGroup: 1000
+      fsGroup: 1000
+      runAsNonRoot: true
+
+# =============================================================================
+# FALCO CONFIGURATION (Runtime Threat Detection)
+# =============================================================================
+falco:
+  # Falco is only needed for the threats capability. Helm decides whether to install a
+  # subchart from this value alone (it cannot read `capabilities`), so set it to false
+  # whenever threats is not in capabilities.
+  enabled: true
+  
+  driver:
+    kind: modern_ebpf
+  
+  containerSecurityContext:
+    privileged: true
+  
+  watchConfigFiles: true
+
+  # cloudanix.yaml is owned by config-manager: it rewrites this key with the console's
+  # baseline + the workspace's threat exclusions. Keep the default identical to the
+  # console's app/jsons/containers/falco_baseline_rules.yaml (cloudanix-web) so a fresh
+  # install starts in sync. It must stay non-empty: Falco's chart only creates and mounts
+  # the rules ConfigMap when customRules has content, and exclusions are written there.
+  customRules:
+    cloudanix.yaml: |
+      # Cloudanix baseline Falco rules, published as config.falcoService.rules ahead of any exclusions.
+      # Cloudanix agents are Kubernetes API clients by design; only that expected call is excepted. All
+      # three fields must match (our namespace, our image, our binary), so a customer pod named like ours
+      # is not covered, and every other rule still fires for our pods.
+      # Exception names here MUST start with cdx_baseline_. Falco merges exceptions by name across
+      # appends to the same rule, so a customer exclusion reusing one would merge into ours or make
+      # the whole file invalid; customer exclusions are named cdx_<falco field>_<comparator>.
+      - rule: Contact K8S API Server From Container
+        override:
+          exceptions: append
+        exceptions:
+        - name: cdx_baseline_own_agents
+          fields: [k8s.ns.name, container.image.repository, proc.exepath]
+          comps: [=, startswith, in]
+          # Binaries: current agents, misconfig-scanner's kube-bench and kubectl, then the pre-July-2026
+          # names still running on older installs (config-cron, inventory-service, threat-service,
+          # exporter-service). Drop a legacy name only once no cluster reports that image.
+          values:
+          - [cloudanix, docker.io/cloudanix/, [/usr/local/bin/config-manager, /usr/local/bin/inventory-collector, /usr/local/bin/threat-monitor, /usr/local/bin/traffic-exporter, /usr/local/bin/vuln-scanner, /usr/local/bin/kube-bench, /usr/bin/kubectl, /usr/local/bin/config-cron, /usr/local/bin/inventory-service, /usr/local/bin/threat-service, /usr/local/bin/exporter-service]]
+
+  falco:
+    json_output: true
+    json_include_output_property: true
+    append_output:
+      # The falco subchart's default, restated because a values list replaces it.
+      - suggested_output: true
+      # threat-monitor reads the pod UID from the cgroup path to place containers
+      # Falco has no pod for: podman/buildah nested in a CI pod, or run on the node.
+      # threat-monitor with pod-origin support drops the field before sending;
+      # older images (v2.3.7 and earlier) forward it, adding bytes to every event.
+      - match:
+          source: syscall
+        extra_fields:
+          - thread.cgroups
+    http_output:
+      enabled: true
+      # NOTE: falco subchart renders this value raw (no templating), so the
+      # namespace cannot be derived from .Release.Namespace. For installs in a
+      # namespace other than `cloudanix`, override at install time:
+      #   --set falco.http_output.url=http://threat-monitor.<namespace>.svc.cluster.local:8080/
+      url: http://threat-monitor.cloudanix.svc.cluster.local:8080/
+
+# =============================================================================
+# RUNTIME THREAT SERVICES
+# =============================================================================
+configManager:
+    name: config-manager
+    templateType: KUBERNETESCONFIGSYNC
+    image: docker.io/cloudanix/config-manager:v2.3.7
+    configMapName: config-manager-cm
+    configURL: https://events.cloudanix.com/cs
+    schedule: "25 * * * *"
+    activeDeadlineSeconds: 14400
+    # The chart's own labels (app: config-manager). Leave as is: on some components they
+    # are the Deployment selector, which cannot change after install.
+    labels:
+        app: config-manager
+    # Extra labels for this component's pods only; win over commonLabels.
+    podLabels: {}
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "250m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+    # End-of-run sync-status report POST (docs/config-sync-status/plan.md, container-security-services).
+    # Reuses configURL above as the POST target - no separate endpoint.
+    statusReporting:
+        enabled: true
+        timeoutSeconds: 30
+        maxRetries: 2
+
+misconfigScanner:
+    name: misconfig-scanner
+    templateType: KUBERNETESMISCONFIG
+    # Run the Cloudanix Best Practices (CBP) benchmark alongside the
+    # platform benchmark (EKS/GKE/AKS/OKE, or CIS when clusterDomain is
+    # unset) in the same run. Set to false to opt out.
+    cbpEnabled: true
+    image: docker.io/cloudanix/misconfig-scanner:v0.4.9
+    configMapName: misconfig-scanner-cm
+    serviceAccount: misconfig-scanner-sa
+    clusterRole: misconfig-scanner-role
+    schedule: "*/20 * * * *"
+    # Slow-but-cheap run; still bounded so a stuck run can't block every
+    # subsequent tick forever under concurrencyPolicy: Forbid.
+    activeDeadlineSeconds: 14400
+    listenerUrl: https://events.cloudanix.com/cs
+    # The chart's own labels (app: misconfig-scanner). Leave as is: on some components they
+    # are the Deployment selector, which cannot change after install.
+    labels:
+        app: misconfig-scanner
+    # Extra labels for this component's pods only; win over commonLabels.
+    podLabels: {}
+    # Runtime is throttled hard, not fast: the job only runs on a schedule and a slow
+    # run is fine, but it must not eat cluster resources. GOMAXPROCS caps the Go
+    # scheduler's thread count.
+    # goMemLimit is unset on purpose: kube-bench derives its soft heap limit as 60% of
+    # the container's cgroup memory limit, leaving the rest to the kubectl/jq audit
+    # subprocesses (the old "500MiB" under a 512Mi limit left them ~12Mi and caused
+    # OOMKills). Set it only to override that.
+    goMaxProcs: "1"
+    goMemLimit: ""
+    # One scan right after install (or when compliance is first enabled) instead of
+    # waiting for the first schedule tick - config-manager usually stretches the schedule
+    # to daily. Set enabled=false for helm template / ArgoCD installs (see
+    # cloudanix.initialRunNeeded).
+    initialRun:
+      enabled: true
+      ttlSecondsAfterFinished: 3600
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "250m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+
+inventoryCollector:
+    name: inventory-collector
+    templateType: KUBERNETESINVENTORIES
+    listenerUrl: https://events.cloudanix.com/cs
+    image: docker.io/cloudanix/inventory-collector:v2.3.7
+    configMapName: inventory-collector-cm
+    serviceAccount: inventory-collector-sa
+    clusterRole: inventory-collector-role
+    bufferSize: 10000
+    bufferDuration: 1200
+    ignoreDuplicates: true
+    # The chart's own labels (app: inventory-collector). Leave as is: on some components they
+    # are the Deployment selector, which cannot change after install.
+    labels:
+        app: inventory-collector
+    # Extra labels for this component's pods only; win over commonLabels.
+    podLabels: {}
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "250m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+
+threatMonitor:
+    name: threat-monitor
+    templateType: KUBERNETESTHREATS
+    serviceAccount: threat-monitor-sa
+    clusterRole: threat-monitor-role
+    listenerUrl: https://events.cloudanix.com/cs
+    replicaCount: 2
+    image: docker.io/cloudanix/threat-monitor:v2.3.7
+    configMapName: threat-monitor-cm
+    bufferSize: 10000
+    bufferDuration: 1500
+    ignoreDuplicates: true
+    # The chart's own labels (app: threat-monitor). Leave as is: on some components they
+    # are the Deployment selector, which cannot change after install.
+    labels:
+        app: threat-monitor
+    # Extra labels for this component's pods only; win over commonLabels.
+    podLabels: {}
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "250m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+
+vulnScanner:
+    name: vuln-scanner
+    templateType: KUBERNETESRUNTIMEIMAGESCAN
+    image: docker.io/cloudanix/vuln-scanner:v2.3.7
+    # Empty selects CRI-O on OCI and containerd on every other cloud.
+    # k3s, microk8s, and OpenShift need an explicit path here and in the remote
+    # vuln-scanner config, or the next config-manager sync replaces it.
+    # Allowed: /run/containerd/containerd.sock, /run/crio/crio.sock,
+    # /var/run/crio/crio.sock, /run/k3s/containerd/containerd.sock,
+    # /var/snap/microk8s/common/run/containerd.sock.
+    containerRuntimeSocket: /run/containerd/containerd.sock
+    configMapName: vuln-scanner-cm
+    serviceAccount: vuln-scanner-sa
+    clusterRole: vuln-scanner-role
+    schedule: "30 5 * * 0"
+    activeDeadlineSeconds: 14400
+    listenerUrl: https://events.cloudanix.com/cs
+    scanTimeout: 14400
+    concurrency: 1
+    ignoreUnfixed: false
+    # Cache hits re-match vulns against the current DB, so this only bounds how
+    # often an image gets a full re-scan. Only matters with persistence enabled.
+    cacheTTLInHours: 720
+    # Persist the scan cache + vuln DB (~1.3Gi) across weekly runs so unchanged
+    # images skip the pull/analysis. Off by default: clusters without a default
+    # StorageClass would leave the scanner pod Pending.
+    # Worst case: DB ~1.3Gi + cache capped at 1000 entries (~0.5Gi of SBOMs).
+    persistence:
+      enabled: false
+      storageClass: ""
+      size: 5Gi
+    # One scan right after install (or when vulnerabilities is first enabled) instead of
+    # waiting up to a week for the first schedule tick. Set enabled=false for
+    # helm template / ArgoCD installs (see cloudanix.initialRunNeeded).
+    initialRun:
+      enabled: true
+      ttlSecondsAfterFinished: 3600
+    # The chart's own labels (app: vuln-scanner). Leave as is: on some components they
+    # are the Deployment selector, which cannot change after install.
+    labels:
+        app: vuln-scanner
+    # Extra labels for this component's pods only; win over commonLabels.
+    podLabels: {}
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits:
+        memory: "2Gi"
+        cpu: "2"
