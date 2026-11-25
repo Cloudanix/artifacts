@@ -1,0 +1,78 @@
+## Your overrides for the Cloudanix chart. Keep ONLY the settings you change here; every
+## other value follows the chart, so an upgrade brings its new defaults with it. Do not copy
+## the chart's full values.yaml: a copy freezes today's defaults (image tags included) and
+## overrides the next version's.
+##
+## Pass this file LAST, after any file Cloudanix gives you, so your settings win:
+##   helm upgrade --install cloudanix ... -f cloudanix-values.yaml cloudanix/cloudanix --version <v>
+## Pass it again on every upgrade. Avoid --reuse-values: it carries the old release's
+## values, defaults included, into the new chart.
+##
+## Uncomment what you need. Lists (tolerations, imagePullSecrets, ...) replace the chart's
+## list instead of adding to it. Annotation and label values are strings: quote "true",
+## "false" and numbers. The chart checks this file against values.schema.json, so a
+## misspelled or misplaced key fails the install with its path instead of being ignored.
+## Every default and comment: helm show values cloudanix/cloudanix --version <v>
+
+## Placement and pod annotations for every Cloudanix pod (not Falco or Cilium; see below).
+# scheduling:
+#   nodeSelector:
+#     kubernetes.io/os: linux
+#   tolerations:
+#     - key: dedicated
+#       operator: Equal
+#       value: cloudanix
+#       effect: NoSchedule
+#   affinity:
+#     nodeAffinity:
+#       requiredDuringSchedulingIgnoredDuringExecution:
+#         nodeSelectorTerms:
+#           - matchExpressions:
+#               - key: node-role
+#                 operator: In
+#                 values: [security]
+#   priorityClassName: cloudanix-agents
+#   podAnnotations:
+#     sidecar.istio.io/inject: "false"
+
+## Labels on every object and pod the chart creates (cost allocation, ownership).
+# commonLabels:
+#   cost-center: "1234"
+#   team: platform
+
+## One component's pods only; wins over scheduling.podAnnotations / commonLabels.
+# vulnScanner:
+#   podAnnotations:
+#     karpenter.sh/do-not-disrupt: "true"
+#   podLabels:
+#     team: security
+
+## Private registry mirror or authenticated Docker Hub pulls. The Secret must exist in the
+## release namespace.
+# imagePullSecrets:
+#   - name: regcred
+
+## Your own registry that you copy our images into: config-manager keeps the sensors on it
+## instead of moving them back to Docker Hub. Ask Cloudanix support to set the same registry
+## for your workspace or cloud account; README.md, "Keep the sensors on your registry".
+# trustedImageRepositories:
+#   - 123456789012.dkr.ecr.us-east-1.amazonaws.com/docker-hub/cloudanix/
+
+## DNS for every Cloudanix pod. Unset uses the cluster default.
+# dnsPolicy: None
+# dnsConfig:
+#   nameservers: ["10.0.0.10"]
+#   options:
+#     - name: ndots
+#       value: "2"
+
+## Falco is a separate chart with its own keys: set its placement there too.
+# falco:
+#   tolerations:
+#     - key: dedicated
+#       operator: Equal
+#       value: cloudanix
+#       effect: NoSchedule
+#   podPriorityClassName: cloudanix-agents
+#   podLabels:
+#     team: platform
