@@ -3,6 +3,11 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+SAVED_IMAGE_TAG=""
+if [ -f ~/jit-infra.env ]; then
+  SAVED_IMAGE_TAG=$(grep '^IMAGE_TAG=' ~/jit-infra.env | head -1 | cut -d= -f2- || true)
+fi
+
 # ============================================================
 # Script 2: JIT Database Access Infrastructure Setup
 #
@@ -68,6 +73,17 @@ read -p "CDX_SIGNATURE_SECRET_KEY: " CDX_SIGN_KEY
 read -p "CDX_SENTRY_DSN (optional): " CDX_SENTRY
 CDX_DC=$(prompt_with_default "CDX_DC (region)" "US")
 CDX_API=$(prompt_with_default "CDX_API_BASE" "https://console.cloudanix.com")
+if [ -z "$SAVED_IMAGE_TAG" ]; then
+  while true; do
+    read -p "Image tag to pull and deploy (for example v0.3.29, not latest): " SAVED_IMAGE_TAG
+    if [[ "$SAVED_IMAGE_TAG" =~ ^[A-Za-z0-9._-]+$ && "$SAVED_IMAGE_TAG" != "latest" ]]; then
+      break
+    fi
+    echo "Enter one immutable tag. latest is not accepted."
+  done
+else
+  echo "Image tag: $SAVED_IMAGE_TAG (from ~/jit-infra.env)"
+fi
 
 echo ""
 echo "PostgreSQL configuration:"
@@ -594,6 +610,7 @@ SMB_STORAGE_NAME=$SMB_STORAGE_NAME
 BLOB_STORAGE_NAME=$BLOB_STORAGE_NAME
 ACR_NAME=$ACR_NAME
 ACR_SERVER=$ACR_SERVER
+IMAGE_TAG=$SAVED_IMAGE_TAG
 JUMPBOX_VM_NAME=$JUMPBOX_VM_NAME
 JUMPBOX_PUBLIC_IP=$JUMPBOX_PUBLIC_IP
 EOF

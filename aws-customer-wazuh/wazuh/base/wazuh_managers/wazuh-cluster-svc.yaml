@@ -1,0 +1,29 @@
+# Copyright (C) 2019, Wazuh Inc.
+#
+# This program is a free software; you can redistribute it
+# and/or modify it under the terms of the GNU General Public
+# License (version 2) as published by the FSF - Free Software
+# Foundation.
+
+# Wazuh cluster Service: Manager nodes communication
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh-cluster
+  namespace: wazuh
+  labels:
+    app: wazuh-manager
+spec:
+  selector:
+    app: wazuh-manager
+  ports:
+    - name: cluster
+      port: 1516
+      targetPort: 1516
+  clusterIP: None
+  # Publish per-pod DNS (e.g. wazuh-manager-master-0.wazuh-cluster) even while a
+  # manager pod is NotReady/restarting. Without this, the master's stable DNS
+  # record can go stale during startup churn and workers fail to join the cluster
+  # with "Error 3028 - Worker node ID already exists" (they dial a stale master IP).
+  publishNotReadyAddresses: true

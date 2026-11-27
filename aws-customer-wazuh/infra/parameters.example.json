@@ -1,0 +1,21 @@
+{
+  "_comment": "Copy to parameters.json and fill in the customer's values. deploy.sh reads this. Region + profile are set as env vars (AWS_REGION / AWS_PROFILE), not here.",
+
+  "ClusterName": "wazuh",
+  "KubernetesVersion": "1.31",
+
+  "VpcId": "vpc-xxxxxxxxxxxxxxxxx",
+
+  "_subnets_comment": "PrivateSubnetIds: 2 private subnets (2 AZs, EKS requirement) for nodes. PublicSubnetIds: 2+ public subnets in DIFFERENT AZs for internet-facing NLBs (required so worker targets in every node AZ are registered). Comma-separated, no spaces. If the customer truly has only one public subnet, pin workers to that AZ — see README 'Single public subnet'.",
+  "PrivateSubnetIds": "subnet-aaaaaaaaaaaaaaaaa,subnet-bbbbbbbbbbbbbbbbb",
+  "PublicSubnetIds": "subnet-ccccccccccccccccc,subnet-ddddddddddddddddd",
+
+  "GeneralInstanceType": "m5.xlarge",
+  "GeneralDesiredSize": "3",
+  "WorkerInstanceType": "m5.large",
+  "WorkerDesiredSize": "2",
+
+  "_secret_comment": "cloudanix integration secret. SecretValue is a JSON object string of {workspace_id: token}. NoEcho in CF. Update later via aws secretsmanager put-secret-value.",
+  "SecretName": "cdx-central-vm-auth-tokens",
+  "SecretValue": "{\"workspace_example\":\"replace-with-real-token\"}"
+}

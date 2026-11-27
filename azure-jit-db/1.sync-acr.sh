@@ -21,9 +21,13 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "Azure Container Registry Setup"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Source (Cloudanix) ACR details
-SOURCE_ACR_NAME="cdxjitacr111"
-SOURCE_ACR_SERVER="${SOURCE_ACR_NAME}.azurecr.io"
+# Cloudanix central registry (anonymous pull). Customer registries created
+# below are named jitacr<suffix>, never this name.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/image-tags.sh"
+SOURCE_ACR_NAME="$CENTRAL_ACR_NAME"
+SOURCE_ACR_SERVER="$CENTRAL_ACR_SERVER"
 SKIP_ACR_CREATION=false
 RESOURCE_GROUP="jit-db-rg"
 echo ""
@@ -92,10 +96,14 @@ else
   echo "Location: $LOCATION"
 fi
 
-# Collect other inputs
-read -p "Image tag to import [latest]: " IMAGE_TAG
-IMAGE_TAG=${IMAGE_TAG:-latest}
-
+echo ""
+while true; do
+  read -p "Image tag to import and deploy (for example v0.3.29, not latest): " IMAGE_TAG
+  if [[ "$IMAGE_TAG" =~ ^[A-Za-z0-9._-]+$ && "$IMAGE_TAG" != "latest" ]]; then
+    break
+  fi
+  echo "Enter one immutable tag. latest is not accepted."
+done
 echo ""
 ENABLE_DAM=false
 if prompt_yes_no "Enable Database Activity Monitoring (DAM)?" "n"; then
@@ -176,98 +184,55 @@ fi
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Docker Login to Source and Target ACRs"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-# Login to source ACR (Cloudanix provides pull-only token)
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "IMPORTANT: Cloudanix Pull-Only Token Required"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-read -p "Press Enter when you have received the token credentials..."
-echo ""
-read -p "Cloudanix ACR token username: " SOURCE_USER
-read -s -p "Cloudanix ACR token password: " SOURCE_PASS
-echo ""
-
-echo "Authenticating to Cloudanix ACR..."
-echo "$SOURCE_PASS" | docker login $SOURCE_ACR_SERVER \
-  --username $SOURCE_USER \
-  --password-stdin
-
-# Login to target ACR (customer)
-echo "Authenticating to your ACR..."
-az acr login --name $ACR_NAME
-
-echo " Docker authenticated to both ACRs"
-echo "   Cloudanix ACR: Pull-only access"
-echo "   Your ACR:      Full access"
-
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Importing Images"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Source: $SOURCE_ACR_SERVER (anonymous pull, no token)"
 
-# Images to import
 IMAGES=(
-  "cloudanix/ecr-aws-jit-proxy-sql"
-  "cloudanix/ecr-aws-jit-proxy-server"
-  "cloudanix/ecr-aws-jit-query-logging"
+  "$DB_PROXYSQL_REPO"
+  "$DB_PROXYSERVER_REPO"
+  "$DB_QUERYLOG_REPO"
 )
 
 if [ "$ENABLE_DAM" = true ]; then
   IMAGES+=(
-    "cloudanix/ecr-aws-jit-dam-server"
-    "cloudanix/ecr-aws-jit-postgresql"
+    "$DB_DAM_REPO"
+    "$DB_POSTGRES_REPO"
   )
 fi
 
 for IMAGE in "${IMAGES[@]}"; do
   echo ""
-  echo "🔄 Processing: ${IMAGE}:${IMAGE_TAG}"
-  
-  SOURCE_IMAGE="${SOURCE_ACR_SERVER}/${IMAGE}:${IMAGE_TAG}"
-  TARGET_IMAGE="${ACR_SERVER}/${IMAGE}:${IMAGE_TAG}"
-  TARGET_IMAGE_LATEST="${ACR_SERVER}/${IMAGE}:latest"
-  
-  echo "  Pulling from source..."
-  docker pull --platform linux/amd64 "$SOURCE_IMAGE"
-  
-  echo "  Tagging for target..."
-  docker tag "$SOURCE_IMAGE" "$TARGET_IMAGE"
-  docker tag "$SOURCE_IMAGE" "$TARGET_IMAGE_LATEST"
-  
-  echo "  Pushing to target..."
-  docker push "$TARGET_IMAGE"
-  docker push "$TARGET_IMAGE_LATEST"
-  
-  echo "   ${IMAGE}"
+  echo "Importing: ${IMAGE}:${IMAGE_TAG}"
+
+  if az acr repository show --name "$ACR_NAME" --image "${IMAGE}:${IMAGE_TAG}" -o none 2>/dev/null; then
+    echo "  Already present"
+    continue
+  fi
+
+  az acr import \
+    --name "$ACR_NAME" \
+    --source "${SOURCE_ACR_SERVER}/${IMAGE}:${IMAGE_TAG}" \
+    --image "${IMAGE}:${IMAGE_TAG}"
+  echo "  Imported"
 done
 
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Cleanup"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-# Remove source credentials
-docker logout $SOURCE_ACR_SERVER
-
-echo " Source credentials removed"
-
-# Save ACR details to config
+# Save ACR details and the tag the containers will run.
 echo ""
 echo "Updating configuration..."
 
-if [ -f ~/jit-infra.env ]; then
-  # Update existing config
-  sed -i.bak "s|^ACR_NAME=.*|ACR_NAME=$ACR_NAME|g" ~/jit-infra.env
-  sed -i.bak "s|^ACR_SERVER=.*|ACR_SERVER=$ACR_SERVER|g" ~/jit-infra.env
-  rm -f ~/jit-infra.env.bak
-  echo " Updated ~/jit-infra.env with ACR details"
+touch ~/jit-infra.env
+if grep -q '^IMAGE_TAG=' ~/jit-infra.env; then
+  sed -i.bak "s|^IMAGE_TAG=.*|IMAGE_TAG=$IMAGE_TAG|" ~/jit-infra.env
 else
-  echo "~/jit-infra.env not found - run 2.setup-infra.sh first"
+  echo "IMAGE_TAG=$IMAGE_TAG" >> ~/jit-infra.env
 fi
+if grep -q '^ACR_NAME=' ~/jit-infra.env; then
+  sed -i.bak "s|^ACR_NAME=.*|ACR_NAME=$ACR_NAME|" ~/jit-infra.env
+  sed -i.bak "s|^ACR_SERVER=.*|ACR_SERVER=$ACR_SERVER|" ~/jit-infra.env
+fi
+rm -f ~/jit-infra.env.bak
+echo " Saved IMAGE_TAG=$IMAGE_TAG to ~/jit-infra.env"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
